@@ -50,6 +50,7 @@ SYSCONFIG_WEAK void SYSCFG_DL_init(void)
     SYSCFG_DL_GPIO_init();
     /* Module-Specific Initializations*/
     SYSCFG_DL_SYSCTL_init();
+    SYSCFG_DL_PWM_TB6612_init();
     SYSCFG_DL_TIMER_0_init();
     SYSCFG_DL_I2C_0_init();
     SYSCFG_DL_UART_0_init();
@@ -61,12 +62,14 @@ SYSCONFIG_WEAK void SYSCFG_DL_initPower(void)
 {
     DL_GPIO_reset(GPIOA);
     DL_GPIO_reset(GPIOB);
+    DL_TimerG_reset(PWM_TB6612_INST);
     DL_TimerG_reset(TIMER_0_INST);
     DL_I2C_reset(I2C_0_INST);
     DL_UART_Main_reset(UART_0_INST);
 
     DL_GPIO_enablePower(GPIOA);
     DL_GPIO_enablePower(GPIOB);
+    DL_TimerG_enablePower(PWM_TB6612_INST);
     DL_TimerG_enablePower(TIMER_0_INST);
     DL_I2C_enablePower(I2C_0_INST);
     DL_UART_Main_enablePower(UART_0_INST);
@@ -78,6 +81,11 @@ SYSCONFIG_WEAK void SYSCFG_DL_GPIO_init(void)
 
     DL_GPIO_initPeripheralAnalogFunction(GPIO_HFXIN_IOMUX);
     DL_GPIO_initPeripheralAnalogFunction(GPIO_HFXOUT_IOMUX);
+
+    DL_GPIO_initPeripheralOutputFunction(GPIO_PWM_TB6612_C0_IOMUX,GPIO_PWM_TB6612_C0_IOMUX_FUNC);
+    DL_GPIO_enableOutput(GPIO_PWM_TB6612_C0_PORT, GPIO_PWM_TB6612_C0_PIN);
+    DL_GPIO_initPeripheralOutputFunction(GPIO_PWM_TB6612_C1_IOMUX,GPIO_PWM_TB6612_C1_IOMUX_FUNC);
+    DL_GPIO_enableOutput(GPIO_PWM_TB6612_C1_PORT, GPIO_PWM_TB6612_C1_PIN);
 
     DL_GPIO_initPeripheralInputFunctionFeatures(GPIO_I2C_0_IOMUX_SDA,
         GPIO_I2C_0_IOMUX_SDA_FUNC, DL_GPIO_INVERSION_DISABLE,
@@ -105,12 +113,28 @@ SYSCONFIG_WEAK void SYSCFG_DL_GPIO_init(void)
 
     DL_GPIO_initDigitalOutput(GPIO_OLED_SW_I2C_PIN_OLED_SCL_IOMUX);
 
-    DL_GPIO_clearPins(GPIO_OLED_SW_I2C_PORT, GPIO_OLED_SW_I2C_PIN_OLED_SDA_PIN |
-		GPIO_OLED_SW_I2C_PIN_OLED_SCL_PIN);
-    DL_GPIO_enableOutput(GPIO_OLED_SW_I2C_PORT, GPIO_OLED_SW_I2C_PIN_OLED_SDA_PIN |
-		GPIO_OLED_SW_I2C_PIN_OLED_SCL_PIN);
-    DL_GPIO_clearPins(GPIOB, LED_PIN_22_PIN);
-    DL_GPIO_enableOutput(GPIOB, LED_PIN_22_PIN);
+    DL_GPIO_initDigitalOutput(GPIO_TB6612_PIN_AIN1_IOMUX);
+
+    DL_GPIO_initDigitalOutput(GPIO_TB6612_PIN_AIN2_IOMUX);
+
+    DL_GPIO_initDigitalOutput(GPIO_TB6612_PIN_BIN1_IOMUX);
+
+    DL_GPIO_initDigitalOutput(GPIO_TB6612_PIN_BIN2_IOMUX);
+
+    DL_GPIO_clearPins(GPIOA, GPIO_OLED_SW_I2C_PIN_OLED_SDA_PIN |
+		GPIO_OLED_SW_I2C_PIN_OLED_SCL_PIN |
+		GPIO_TB6612_PIN_BIN1_PIN);
+    DL_GPIO_enableOutput(GPIOA, GPIO_OLED_SW_I2C_PIN_OLED_SDA_PIN |
+		GPIO_OLED_SW_I2C_PIN_OLED_SCL_PIN |
+		GPIO_TB6612_PIN_BIN1_PIN);
+    DL_GPIO_clearPins(GPIOB, LED_PIN_22_PIN |
+		GPIO_TB6612_PIN_AIN1_PIN |
+		GPIO_TB6612_PIN_AIN2_PIN |
+		GPIO_TB6612_PIN_BIN2_PIN);
+    DL_GPIO_enableOutput(GPIOB, LED_PIN_22_PIN |
+		GPIO_TB6612_PIN_AIN1_PIN |
+		GPIO_TB6612_PIN_AIN2_PIN |
+		GPIO_TB6612_PIN_BIN2_PIN);
     DL_GPIO_setLowerPinsPolarity(GPIOB, DL_GPIO_PIN_4_EDGE_FALL);
     DL_GPIO_clearInterruptStatus(GPIOB, GPIO_MPU6050_INT_PIN_MPU6050_INT_PIN);
     DL_GPIO_enableInterrupt(GPIOB, GPIO_MPU6050_INT_PIN_MPU6050_INT_PIN);
@@ -228,6 +252,59 @@ SYSCONFIG_WEAK void SYSCFG_DL_SYSCTL_init(void)
     DL_SYSCTL_setMCLKSource(SYSOSC, HSCLK, DL_SYSCTL_HSCLK_SOURCE_SYSPLL);
     /* INT_GROUP1 Priority */
     NVIC_SetPriority(GPIOB_INT_IRQn, 3);
+
+}
+
+
+/*
+ * Timer clock configuration to be sourced by  / 1 (40000000 Hz)
+ * timerClkFreq = (timerClkSrc / (timerClkDivRatio * (timerClkPrescale + 1)))
+ *   40000000 Hz = 40000000 Hz / (1 * (0 + 1))
+ */
+static const DL_TimerG_ClockConfig gPWM_TB6612ClockConfig = {
+    .clockSel = DL_TIMER_CLOCK_BUSCLK,
+    .divideRatio = DL_TIMER_CLOCK_DIVIDE_1,
+    .prescale = 0U
+};
+
+static const DL_TimerG_PWMConfig gPWM_TB6612Config = {
+    .pwmMode = DL_TIMER_PWM_MODE_EDGE_ALIGN,
+    .period = 2000,
+    .isTimerWithFourCC = false,
+    .startTimer = DL_TIMER_STOP,
+};
+
+SYSCONFIG_WEAK void SYSCFG_DL_PWM_TB6612_init(void) {
+
+    DL_TimerG_setClockConfig(
+        PWM_TB6612_INST, (DL_TimerG_ClockConfig *) &gPWM_TB6612ClockConfig);
+
+    DL_TimerG_initPWMMode(
+        PWM_TB6612_INST, (DL_TimerG_PWMConfig *) &gPWM_TB6612Config);
+
+    // Set Counter control to the smallest CC index being used
+    DL_TimerG_setCounterControl(PWM_TB6612_INST,DL_TIMER_CZC_CCCTL0_ZCOND,DL_TIMER_CAC_CCCTL0_ACOND,DL_TIMER_CLC_CCCTL0_LCOND);
+
+    DL_TimerG_setCaptureCompareOutCtl(PWM_TB6612_INST, DL_TIMER_CC_OCTL_INIT_VAL_LOW,
+		DL_TIMER_CC_OCTL_INV_OUT_DISABLED, DL_TIMER_CC_OCTL_SRC_FUNCVAL,
+		DL_TIMERG_CAPTURE_COMPARE_0_INDEX);
+
+    DL_TimerG_setCaptCompUpdateMethod(PWM_TB6612_INST, DL_TIMER_CC_UPDATE_METHOD_IMMEDIATE, DL_TIMERG_CAPTURE_COMPARE_0_INDEX);
+    DL_TimerG_setCaptureCompareValue(PWM_TB6612_INST, 2000, DL_TIMER_CC_0_INDEX);
+
+    DL_TimerG_setCaptureCompareOutCtl(PWM_TB6612_INST, DL_TIMER_CC_OCTL_INIT_VAL_LOW,
+		DL_TIMER_CC_OCTL_INV_OUT_DISABLED, DL_TIMER_CC_OCTL_SRC_FUNCVAL,
+		DL_TIMERG_CAPTURE_COMPARE_1_INDEX);
+
+    DL_TimerG_setCaptCompUpdateMethod(PWM_TB6612_INST, DL_TIMER_CC_UPDATE_METHOD_IMMEDIATE, DL_TIMERG_CAPTURE_COMPARE_1_INDEX);
+    DL_TimerG_setCaptureCompareValue(PWM_TB6612_INST, 2000, DL_TIMER_CC_1_INDEX);
+
+    DL_TimerG_enableClock(PWM_TB6612_INST);
+
+
+    
+    DL_TimerG_setCCPDirection(PWM_TB6612_INST , DL_TIMER_CC0_OUTPUT | DL_TIMER_CC1_OUTPUT );
+
 
 }
 

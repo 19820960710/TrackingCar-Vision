@@ -89,6 +89,26 @@ extern "C" {
 bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 
 
+/* Defines for PWM_TB6612 */
+#define PWM_TB6612_INST                                                    TIMG0
+#define PWM_TB6612_INST_IRQHandler                              TIMG0_IRQHandler
+#define PWM_TB6612_INST_INT_IRQN                                (TIMG0_INT_IRQn)
+#define PWM_TB6612_INST_CLK_FREQ                                        40000000
+/* GPIO defines for channel 0 */
+#define GPIO_PWM_TB6612_C0_PORT                                            GPIOA
+#define GPIO_PWM_TB6612_C0_PIN                                    DL_GPIO_PIN_12
+#define GPIO_PWM_TB6612_C0_IOMUX                                 (IOMUX_PINCM34)
+#define GPIO_PWM_TB6612_C0_IOMUX_FUNC                IOMUX_PINCM34_PF_TIMG0_CCP0
+#define GPIO_PWM_TB6612_C0_IDX                               DL_TIMER_CC_0_INDEX
+/* GPIO defines for channel 1 */
+#define GPIO_PWM_TB6612_C1_PORT                                            GPIOA
+#define GPIO_PWM_TB6612_C1_PIN                                    DL_GPIO_PIN_13
+#define GPIO_PWM_TB6612_C1_IOMUX                                 (IOMUX_PINCM35)
+#define GPIO_PWM_TB6612_C1_IOMUX_FUNC                IOMUX_PINCM35_PF_TIMG0_CCP1
+#define GPIO_PWM_TB6612_C1_IDX                               DL_TIMER_CC_1_INDEX
+
+
+
 /* Defines for TIMER_0 */
 #define TIMER_0_INST                                                    (TIMG12)
 #define TIMER_0_INST_IRQHandler                                TIMG12_IRQHandler
@@ -159,6 +179,22 @@ bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 /* Defines for PIN_OLED_SCL: GPIOA.31 with pinCMx 6 on package pin 39 */
 #define GPIO_OLED_SW_I2C_PIN_OLED_SCL_PIN                       (DL_GPIO_PIN_31)
 #define GPIO_OLED_SW_I2C_PIN_OLED_SCL_IOMUX                       (IOMUX_PINCM6)
+/* Defines for PIN_AIN1: GPIOB.17 with pinCMx 43 on package pin 14 */
+#define GPIO_TB6612_PIN_AIN1_PORT                                        (GPIOB)
+#define GPIO_TB6612_PIN_AIN1_PIN                                (DL_GPIO_PIN_17)
+#define GPIO_TB6612_PIN_AIN1_IOMUX                               (IOMUX_PINCM43)
+/* Defines for PIN_AIN2: GPIOB.19 with pinCMx 45 on package pin 16 */
+#define GPIO_TB6612_PIN_AIN2_PORT                                        (GPIOB)
+#define GPIO_TB6612_PIN_AIN2_PIN                                (DL_GPIO_PIN_19)
+#define GPIO_TB6612_PIN_AIN2_IOMUX                               (IOMUX_PINCM45)
+/* Defines for PIN_BIN1: GPIOA.16 with pinCMx 38 on package pin 9 */
+#define GPIO_TB6612_PIN_BIN1_PORT                                        (GPIOA)
+#define GPIO_TB6612_PIN_BIN1_PIN                                (DL_GPIO_PIN_16)
+#define GPIO_TB6612_PIN_BIN1_IOMUX                               (IOMUX_PINCM38)
+/* Defines for PIN_BIN2: GPIOB.24 with pinCMx 52 on package pin 23 */
+#define GPIO_TB6612_PIN_BIN2_PORT                                        (GPIOB)
+#define GPIO_TB6612_PIN_BIN2_PIN                                (DL_GPIO_PIN_24)
+#define GPIO_TB6612_PIN_BIN2_IOMUX                               (IOMUX_PINCM52)
 
 
 /* clang-format on */
@@ -169,6 +205,7 @@ void SYSCFG_DL_GPIO_init(void);
 void SYSCFG_DL_SYSCTL_init(void);
 
 bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
+void SYSCFG_DL_PWM_TB6612_init(void);
 void SYSCFG_DL_TIMER_0_init(void);
 void SYSCFG_DL_I2C_0_init(void);
 void SYSCFG_DL_UART_0_init(void);

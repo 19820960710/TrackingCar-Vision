@@ -10,6 +10,7 @@
 #include "UART/uart0.h"
 #include "oled/oled.h"
 #include "mpu6050/mpu6050.h"
+#include "tb6612/tb6612.h"
 #include <stdio.h>
 
 typedef struct {
@@ -44,13 +45,11 @@ static void mpu_task(void *pvParameters)
     msg.status = MPU6050_Init();
     if (msg.status != 0) {
         xQueueOverwrite(g_attitude_queue, &msg);
-        uart0_sendStr("MPU6050 init failed\r\n");
         for (;;) {
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
     }
 
-    uart0_sendStr("MPU6050 init success\r\n");
     (void)ulTaskNotifyTake(pdTRUE, 0);
 
     for (;;) {
@@ -97,6 +96,59 @@ static void oled_task(void *pvParameters)
     }
 }
 
+/* ── TB6612 电机驱动测试任务 ── */
+static void tb6612_test_task(void *pvParameters)
+{
+    (void)pvParameters;
+
+    /* 等待系统稳定 */
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    uart0_sendStr("[TB6612] 测试开始\r\n");
+
+    for (;;) {
+        /* 1. 前进 */
+        uart0_sendStr("[TB6612] 前进 50%%\r\n");
+        tb6612_set_speed(50, 50);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+
+        /* 2. 停止 */
+        uart0_sendStr("[TB6612] 停止\r\n");
+        tb6612_stop();
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        /* 3. 后退 */
+        uart0_sendStr("[TB6612] 后退 50%%\r\n");
+        tb6612_set_speed(-50, -50);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+
+        /* 4. 停止 */
+        uart0_sendStr("[TB6612] 停止\r\n");
+        tb6612_stop();
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        /* 5. 左转 */
+        uart0_sendStr("[TB6612] 左转\r\n");
+        tb6612_set_speed(-40, 40);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+
+        /* 6. 停止 */
+        uart0_sendStr("[TB6612] 停止\r\n");
+        tb6612_stop();
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        /* 7. 右转 */
+        uart0_sendStr("[TB6612] 右转\r\n");
+        tb6612_set_speed(40, -40);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+
+        /* 8. 停止，循环 */
+        uart0_sendStr("[TB6612] 停止\r\n");
+        tb6612_stop();
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
 static void prvSetupHardware(void)
 {
     SYSCFG_DL_init();
@@ -106,6 +158,7 @@ static void prvSetupHardware(void)
 
     led_init();
     uart0_init();
+    tb6612_init();
 }
 
 int main(void)
@@ -124,6 +177,7 @@ int main(void)
     xTaskCreate(uart0_Recive_task, "UART_Recv",  256, NULL, 1, NULL);
     xTaskCreate(mpu_task,          "MPU",       512, NULL, 2, &g_mpu_task_handle);
     xTaskCreate(oled_task,         "OLED",       512, NULL, 1, NULL);
+    xTaskCreate(tb6612_test_task,  "TB6612_TEST",256, NULL, 1, NULL);
 
     vTaskStartScheduler();
 

@@ -586,6 +586,21 @@
             </File>
           </Files>
         </Group>
+        <Group>
+          <GroupName>Component/tb6612</GroupName>
+          <Files>
+            <File>
+              <FileName>tb6612.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/tb6612/tb6612.c</FilePath>
+            </File>
+            <File>
+              <FileName>tb6612.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/tb6612/tb6612.h</FilePath>
+            </File>
+          </Files>
+        </Group>
       </Groups>
     </Target>
   </Targets>
