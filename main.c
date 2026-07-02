@@ -93,6 +93,7 @@ static void oled_task(void *pvParameters)
             OLED_vsprint(0, 48, 16, "Y:%.2f", msg.yaw10);
             OLED_Refresh();
         }
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -117,7 +118,7 @@ int main(void)
     xTaskCreate(led_task,          "LED",        128, NULL, 1, NULL);
     xTaskCreate(uart0_Send_task,   "UART_Send",  256, NULL, 1, NULL);
     xTaskCreate(uart0_Recive_task, "UART_Recv",  256, NULL, 1, NULL);
-    xTaskCreate(mpu_task,          "MPU",       512, NULL, 1, &g_mpu_task_handle);
+    xTaskCreate(mpu_task,          "MPU",       512, NULL, 2, &g_mpu_task_handle);
     xTaskCreate(oled_task,         "OLED",       512, NULL, 1, NULL);
 
     vTaskStartScheduler();
