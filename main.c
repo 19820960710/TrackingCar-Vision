@@ -14,9 +14,9 @@
 
 typedef struct {
     int status;
-    int pitch10;
-    int roll10;
-    int yaw10;
+    float pitch10;
+    float roll10;
+    float yaw10;
 } attitude_msg_t;
 
 static QueueHandle_t g_attitude_queue = NULL;
@@ -58,9 +58,9 @@ static void mpu_task(void *pvParameters)
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         if (Read_Quad() == 0) {
             msg.status = 0;
-            msg.pitch10 = angle_to_tenth(pitch);
-            msg.roll10 = angle_to_tenth(roll);
-            msg.yaw10 = angle_to_tenth(yaw);
+            msg.pitch10 = pitch;
+            msg.roll10 = roll;
+            msg.yaw10 = yaw;
             xQueueOverwrite(g_attitude_queue, &msg);
         }
     }
@@ -70,14 +70,8 @@ static void oled_task(void *pvParameters)
 {
     (void)pvParameters;
     attitude_msg_t msg;
-
+    uint8_t oled_clear_flag = 0;
     OLED_Init();
-
-    OLED_ShowString(0, 0,  "MSPM0G3507", 16, 1);
-    OLED_ShowString(0, 16, "FreeRTOS OK", 16, 1);
-    OLED_ShowString(0, 32, "MPU6050 Wait", 16, 1);
-    OLED_Refresh();
-
     OLED_Clear();
 
     for (;;) {
@@ -85,22 +79,18 @@ static void oled_task(void *pvParameters)
             if (msg.status != 0) {
                 OLED_Clear();
                 OLED_ShowString(0, 0, "MPU6050 ERR", 16, 1);
-                OLED_ShowString(0, 16, "HW I2C0", 16, 1);
-                OLED_ShowString(0, 32, "PA1 SCL", 16, 1);
-                OLED_ShowString(0, 48, "PA0 SDA", 16, 1);
                 OLED_Refresh();
                 continue;
             }
-
-            int pitch_abs = (msg.pitch10 >= 0) ? msg.pitch10 : -msg.pitch10;
-            int roll_abs  = (msg.roll10  >= 0) ? msg.roll10  : -msg.roll10;
-            int yaw_abs   = (msg.yaw10   >= 0) ? msg.yaw10   : -msg.yaw10;
-
-            // OLED_Clear();
+            oled_clear_flag++;
+            if (oled_clear_flag > 10) {
+                oled_clear_flag = 0;
+                OLED_Clear();
+            }
             OLED_ShowString(0, 0, "MPU6050 DMP", 16, 1);
-            OLED_vsprint(0, 16, 16, "P:%c%d.%1d", (msg.pitch10 < 0) ? '-' : '+', pitch_abs / 10, pitch_abs % 10);
-            OLED_vsprint(0, 32, 16, "R:%c%d.%1d", (msg.roll10 < 0) ? '-' : '+', roll_abs / 10, roll_abs % 10);
-            OLED_vsprint(0, 48, 16, "Y:%c%d.%1d", (msg.yaw10 < 0) ? '-' : '+', yaw_abs / 10, yaw_abs % 10);
+            OLED_vsprint(0, 16, 16, "P:%.2f", msg.pitch10 );
+            OLED_vsprint(0, 32, 16, "R:%.2f", msg.roll10);
+            OLED_vsprint(0, 48, 16, "Y:%.2f", msg.yaw10);
             OLED_Refresh();
         }
     }
@@ -127,7 +117,7 @@ int main(void)
     xTaskCreate(led_task,          "LED",        128, NULL, 1, NULL);
     xTaskCreate(uart0_Send_task,   "UART_Send",  256, NULL, 1, NULL);
     xTaskCreate(uart0_Recive_task, "UART_Recv",  256, NULL, 1, NULL);
-    xTaskCreate(mpu_task,          "MPU",       1024, NULL, 1, &g_mpu_task_handle);
+    xTaskCreate(mpu_task,          "MPU",       512, NULL, 1, &g_mpu_task_handle);
     xTaskCreate(oled_task,         "OLED",       512, NULL, 1, NULL);
 
     vTaskStartScheduler();
