@@ -3,8 +3,8 @@
 
 /**
  * @file    oled.h
- * @brief   SSD1306 OLED 128×64 硬件 I2C 显示屏驱动接口 (MSPM0G3507)
- *          I2C0: PA28=SDA, PA31=SCL, 由 SysConfig 生成 I2C_0 实例
+ * @brief   SSD1306 OLED 128×64 软件 I2C 显示屏驱动接口 (MSPM0G3507)
+ *          软件 I2C: PA28=SDA, PA31=SCL；硬件 I2C0 留给 MPU6050
  */
 
 #include <stdint.h>
