@@ -28,4 +28,8 @@ int MPU6050_Init(void);
 int MPU6050_IsReady(void);
 int Read_Quad(void);
 
+void MPU6050_IntEnable(void);
+int MPU6050_IntIsPending(void);
+void MPU6050_IntClear(void);
+
 #endif  /* #ifndef _MPU6050_H_ */

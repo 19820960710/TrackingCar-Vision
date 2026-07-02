@@ -100,6 +100,10 @@ static void oled_task(void *pvParameters)
 static void prvSetupHardware(void)
 {
     SYSCFG_DL_init();
+
+    /* MPU6050 中断由组件内部适配 SysConfig 生成宏名，main.c 不直接依赖生成宏。 */
+    MPU6050_IntEnable();
+
     led_init();
     uart0_init();
 }
@@ -131,8 +135,8 @@ void GROUP1_IRQHandler(void)
 {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-    if (DL_GPIO_getPendingInterrupt(GPIO_MPU6050_INT_PORT) == GPIO_MPU6050_INT_PIN_MPU6050_INT_IIDX) {
-        DL_GPIO_clearInterruptStatus(GPIO_MPU6050_INT_PORT, GPIO_MPU6050_INT_PIN_MPU6050_INT_PIN);
+    if (MPU6050_IntIsPending()) {
+        MPU6050_IntClear();
         if (g_mpu_task_handle != NULL) {
             vTaskNotifyGiveFromISR(g_mpu_task_handle, &xHigherPriorityTaskWoken);
         }

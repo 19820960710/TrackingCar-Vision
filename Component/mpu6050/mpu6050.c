@@ -14,6 +14,20 @@
 
 static int g_mpu6050_ready = 0;
 
+#if defined(GPIO_MPU6050_INT_PIN_MPU6050_INT_PIN)
+#define MPU6050_INT_PORT        GPIO_MPU6050_INT_PORT
+#define MPU6050_INT_PIN         GPIO_MPU6050_INT_PIN_MPU6050_INT_PIN
+#define MPU6050_INT_IIDX        GPIO_MPU6050_INT_PIN_MPU6050_INT_IIDX
+#define MPU6050_INT_IRQN        GPIO_MPU6050_INT_INT_IRQN
+#elif defined(GPIO_MPU6050_INT_PIN)
+#define MPU6050_INT_PORT        GPIO_MPU6050_INT_PORT
+#define MPU6050_INT_PIN         GPIO_MPU6050_INT_PIN
+#define MPU6050_INT_IIDX        GPIO_MPU6050_INT_IIDX
+#define MPU6050_INT_IRQN        GPIO_MPU6050_INT_IRQN
+#else
+#error "MPU6050 INT SysConfig macros not found. Check main.syscfg GPIO_MPU6050_INT pin configuration."
+#endif
+
 /* Data requested by client. */
 #define PRINT_ACCEL     (0x01)
 #define PRINT_GYRO      (0x02)
@@ -209,6 +223,22 @@ int MPU6050_Init(void)
 int MPU6050_IsReady(void)
 {
     return g_mpu6050_ready;
+}
+
+void MPU6050_IntEnable(void)
+{
+    NVIC_ClearPendingIRQ(MPU6050_INT_IRQN);
+    NVIC_EnableIRQ(MPU6050_INT_IRQN);
+}
+
+int MPU6050_IntIsPending(void)
+{
+    return (DL_GPIO_getPendingInterrupt(MPU6050_INT_PORT) == MPU6050_INT_IIDX);
+}
+
+void MPU6050_IntClear(void)
+{
+    DL_GPIO_clearInterruptStatus(MPU6050_INT_PORT, MPU6050_INT_PIN);
 }
 
 int Read_Quad(void)
