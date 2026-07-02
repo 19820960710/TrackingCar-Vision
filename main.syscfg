@@ -11,6 +11,7 @@
  */
 const GPIO   = scripting.addModule("/ti/driverlib/GPIO", {}, false);
 const GPIO1  = GPIO.addInstance();
+const GPIO2  = GPIO.addInstance();
 const SYSCTL = scripting.addModule("/ti/driverlib/SYSCTL");
 const TIMER  = scripting.addModule("/ti/driverlib/TIMER", {}, false);
 const TIMER1 = TIMER.addInstance();
@@ -56,6 +57,19 @@ GPIO1.$name                         = "LED";
 GPIO1.port                          = "PORTB";
 GPIO1.associatedPins[0].$name       = "PIN_22";
 GPIO1.associatedPins[0].assignedPin = "22";
+
+/**
+ * GPIO: PB4 as MPU6050 INT input, falling-edge interrupt
+ */
+GPIO2.$name                              = "GPIO_MPU6050_INT";
+GPIO2.port                               = "PORTB";
+GPIO2.associatedPins[0].$name            = "INT";
+GPIO2.associatedPins[0].direction        = "INPUT";
+GPIO2.associatedPins[0].internalResistor = "PULL_UP";
+GPIO2.associatedPins[0].interruptEn      = true;
+GPIO2.associatedPins[0].interruptPriority = "3";
+GPIO2.associatedPins[0].polarity         = "FALL";
+GPIO2.associatedPins[0].assignedPin      = "4";
 
 /**
  * TIMG12: 1 ms periodic timer for LED blinking
@@ -104,6 +118,7 @@ hfxt.peripheral.$suggestSolution           = "SYSCTL";
 hfxt.peripheral.hfxInPin.$suggestSolution  = "PA5";
 hfxt.peripheral.hfxOutPin.$suggestSolution = "PA6";
 GPIO1.associatedPins[0].pin.$suggestSolution = "PB22";
+GPIO2.associatedPins[0].pin.$suggestSolution = "PB4";
 Board.peripheral.$suggestSolution            = "DEBUGSS";
 Board.peripheral.swclkPin.$suggestSolution   = "PA20";
 Board.peripheral.swdioPin.$suggestSolution   = "PA19";

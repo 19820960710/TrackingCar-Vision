@@ -113,6 +113,14 @@ bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 #define GPIO_I2C_0_IOMUX_SCL_FUNC                       IOMUX_PINCM2_PF_I2C0_SCL
 
 
+/* Defines for GPIO_MPU6050_INT: PB4 falling-edge interrupt */
+#define GPIO_MPU6050_INT_PORT                                             GPIOB
+#define GPIO_MPU6050_INT_PIN                                      DL_GPIO_PIN_4
+#define GPIO_MPU6050_INT_IOMUX                                     (IOMUX_PINCM17)
+#define GPIO_MPU6050_INT_IIDX                                  DL_GPIO_IIDX_DIO4
+#define GPIO_MPU6050_INT_IRQN                                   GPIOB_INT_IRQn
+
+
 /* Defines for UART_0 */
 #define UART_0_INST                                                        UART0
 #define UART_0_INST_FREQUENCY                                           40000000

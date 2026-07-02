@@ -20,6 +20,7 @@ typedef struct {
 } attitude_msg_t;
 
 static QueueHandle_t g_attitude_queue = NULL;
+static TaskHandle_t g_mpu_task_handle = NULL;
 
 static int angle_to_tenth(float angle)
 {
@@ -50,8 +51,11 @@ static void mpu_task(void *pvParameters)
     }
 
     uart0_sendStr("MPU6050 init success\r\n");
+    (void)ulTaskNotifyTake(pdTRUE, 0);
 
     for (;;) {
+        /* MPU6050 INT(PB4) 到来后再读 FIFO；ISR 只通知任务，不在中断里访问 I2C。 */
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         if (Read_Quad() == 0) {
             msg.status = 0;
             msg.pitch10 = angle_to_tenth(pitch);
@@ -59,7 +63,6 @@ static void mpu_task(void *pvParameters)
             msg.yaw10 = angle_to_tenth(yaw);
             xQueueOverwrite(g_attitude_queue, &msg);
         }
-        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 
@@ -67,6 +70,8 @@ static void oled_task(void *pvParameters)
 {
     (void)pvParameters;
     attitude_msg_t msg;
+
+    OLED_Init();
 
     OLED_ShowString(0, 0,  "MSPM0G3507", 16, 1);
     OLED_ShowString(0, 16, "FreeRTOS OK", 16, 1);
@@ -106,7 +111,6 @@ static void prvSetupHardware(void)
     SYSCFG_DL_init();
     led_init();
     uart0_init();
-    OLED_Init();
 }
 
 int main(void)
@@ -123,8 +127,8 @@ int main(void)
     xTaskCreate(led_task,          "LED",        128, NULL, 1, NULL);
     xTaskCreate(uart0_Send_task,   "UART_Send",  256, NULL, 1, NULL);
     xTaskCreate(uart0_Recive_task, "UART_Recv",  256, NULL, 1, NULL);
-    xTaskCreate(mpu_task,          "MPU",       1024, NULL, 3, NULL);
-    xTaskCreate(oled_task,         "OLED",       512, NULL, 2, NULL);
+    xTaskCreate(mpu_task,          "MPU",       1024, NULL, 1, &g_mpu_task_handle);
+    xTaskCreate(oled_task,         "OLED",       512, NULL, 1, NULL);
 
     vTaskStartScheduler();
 
@@ -132,6 +136,20 @@ int main(void)
 }
 
 /* FreeRTOS 钩子 */
+void GROUP1_IRQHandler(void)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    if (DL_GPIO_getPendingInterrupt(GPIO_MPU6050_INT_PORT) == GPIO_MPU6050_INT_IIDX) {
+        DL_GPIO_clearInterruptStatus(GPIO_MPU6050_INT_PORT, GPIO_MPU6050_INT_PIN);
+        if (g_mpu_task_handle != NULL) {
+            vTaskNotifyGiveFromISR(g_mpu_task_handle, &xHigherPriorityTaskWoken);
+        }
+    }
+
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
 void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 {
     (void)xTask; (void)pcTaskName;
