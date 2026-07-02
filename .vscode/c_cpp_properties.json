@@ -5,12 +5,12 @@
             "includePath": [
                 "${workspaceFolder}",
                 "${workspaceFolder}/Component",
-                "D:/tool/CCS/mspm0_sdk_2_10_00_04/source",
-                "D:/tool/CCS/mspm0_sdk_2_10_00_04/source/ti/devices/msp",
-                "D:/tool/CCS/mspm0_sdk_2_10_00_04/source/third_party/CMSIS/Core/Include",
-                "D:/tool/CCS/mspm0_sdk_2_10_00_04/kernel/freertos/Source/include",
-                "D:/tool/CCS/mspm0_sdk_2_10_00_04/kernel/freertos/Source/portable/TI_ARM_CLANG/ARM_CM0",
-                "D:/tool/CCS/mspm0_sdk_2_10_00_04/kernel/freertos/builds/LP_MSPM0G3507/release",
+                "${workspaceFolder}/keil/FreeRTOS/include",
+                "${workspaceFolder}/keil/FreeRTOS/portable/GCC/ARM_CM0",
+                "${workspaceFolder}/keil/FreeRTOS/portable/MemMang",
+                "${env:MSPM0_SDK}/source",
+                "${env:MSPM0_SDK}/source/ti/devices/msp",
+                "${env:MSPM0_SDK}/source/third_party/CMSIS/Core/Include",
                 "D:/keil/ARM/ARMCLANG/include",
                 "D:/keil/ARM/ARMCLANG/lib/clang/20/include"
             ],
@@ -18,11 +18,12 @@
                 "path": [
                     "${workspaceFolder}",
                     "${workspaceFolder}/Component",
-                    "D:/tool/CCS/mspm0_sdk_2_10_00_04/source",
-                    "D:/tool/CCS/mspm0_sdk_2_10_00_04/source/ti/devices/msp",
-                    "D:/tool/CCS/mspm0_sdk_2_10_00_04/source/third_party/CMSIS/Core/Include",
-                    "D:/tool/CCS/mspm0_sdk_2_10_00_04/kernel/freertos/Source/include",
-                    "D:/tool/CCS/mspm0_sdk_2_10_00_04/kernel/freertos/builds/LP_MSPM0G3507/release",
+                    "${workspaceFolder}/keil/FreeRTOS/include",
+                    "${workspaceFolder}/keil/FreeRTOS/portable/GCC/ARM_CM0",
+                    "${workspaceFolder}/keil/FreeRTOS/portable/MemMang",
+                    "${env:MSPM0_SDK}/source",
+                    "${env:MSPM0_SDK}/source/ti/devices/msp",
+                    "${env:MSPM0_SDK}/source/third_party/CMSIS/Core/Include",
                     "D:/keil/ARM/ARMCLANG/include"
                 ],
                 "limitSymbolsToIncludedHeaders": false
