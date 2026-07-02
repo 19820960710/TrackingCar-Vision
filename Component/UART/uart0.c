@@ -84,7 +84,8 @@ void uart0_Send_task(void *arg)
     char buf[TX_BUF_SIZE];
 
     while (1) {
-        snprintf(buf, sizeof(buf), "Hello UART0 %d\r\n", n);
+        TickType_t now = xTaskGetTickCount();
+        snprintf(buf, sizeof(buf), "Hello UART0 %d [tick=%lu]\r\n", n, (unsigned long)now);
         uart0_sendStr(buf);
 
         if (n % 10 == 0) {

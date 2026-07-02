@@ -113,14 +113,6 @@ bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 #define GPIO_I2C_0_IOMUX_SCL_FUNC                       IOMUX_PINCM2_PF_I2C0_SCL
 
 
-/* Defines for GPIO_MPU6050_INT: PB4 falling-edge interrupt */
-#define GPIO_MPU6050_INT_PORT                                             GPIOB
-#define GPIO_MPU6050_INT_PIN                                      DL_GPIO_PIN_4
-#define GPIO_MPU6050_INT_IOMUX                                     (IOMUX_PINCM17)
-#define GPIO_MPU6050_INT_IIDX                                  DL_GPIO_IIDX_DIO4
-#define GPIO_MPU6050_INT_IRQN                                   GPIOB_INT_IRQn
-
-
 /* Defines for UART_0 */
 #define UART_0_INST                                                        UART0
 #define UART_0_INST_FREQUENCY                                           40000000
@@ -148,6 +140,25 @@ bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 /* Defines for PIN_22: GPIOB.22 with pinCMx 50 on package pin 21 */
 #define LED_PIN_22_PIN                                          (DL_GPIO_PIN_22)
 #define LED_PIN_22_IOMUX                                         (IOMUX_PINCM50)
+/* Port definition for Pin Group GPIO_MPU6050_INT */
+#define GPIO_MPU6050_INT_PORT                                            (GPIOB)
+
+/* Defines for PIN_MPU6050_INT: GPIOB.4 with pinCMx 17 on package pin 52 */
+// pins affected by this interrupt request:["PIN_MPU6050_INT"]
+#define GPIO_MPU6050_INT_INT_IRQN                               (GPIOB_INT_IRQn)
+#define GPIO_MPU6050_INT_INT_IIDX               (DL_INTERRUPT_GROUP1_IIDX_GPIOB)
+#define GPIO_MPU6050_INT_PIN_MPU6050_INT_IIDX                (DL_GPIO_IIDX_DIO4)
+#define GPIO_MPU6050_INT_PIN_MPU6050_INT_PIN                     (DL_GPIO_PIN_4)
+#define GPIO_MPU6050_INT_PIN_MPU6050_INT_IOMUX                   (IOMUX_PINCM17)
+/* Port definition for Pin Group GPIO_OLED_SW_I2C */
+#define GPIO_OLED_SW_I2C_PORT                                            (GPIOA)
+
+/* Defines for PIN_OLED_SDA: GPIOA.28 with pinCMx 3 on package pin 35 */
+#define GPIO_OLED_SW_I2C_PIN_OLED_SDA_PIN                       (DL_GPIO_PIN_28)
+#define GPIO_OLED_SW_I2C_PIN_OLED_SDA_IOMUX                       (IOMUX_PINCM3)
+/* Defines for PIN_OLED_SCL: GPIOA.31 with pinCMx 6 on package pin 39 */
+#define GPIO_OLED_SW_I2C_PIN_OLED_SCL_PIN                       (DL_GPIO_PIN_31)
+#define GPIO_OLED_SW_I2C_PIN_OLED_SCL_IOMUX                       (IOMUX_PINCM6)
 
 
 /* clang-format on */

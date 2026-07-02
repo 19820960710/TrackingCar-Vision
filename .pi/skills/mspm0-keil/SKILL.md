@@ -75,14 +75,35 @@ If `Flash Download failed - "Cortex-M0+"`:
 ## Core Rules
 
 - `.syscfg` is the source of truth for pinmux, peripherals, clocks, interrupts.
+- **All external/peripheral pin initialization must be represented in SysConfig**, including GPIO used for software/bit-banged protocols such as software I2C/SPI, display reset pins, chip selects, interrupts, and manually toggled SCL/SDA lines.
+- Application drivers must use generated SysConfig macros from `ti_msp_dl_config.h` for ports, pins, IOMUX, IRQn, and instance names; never hard-code `DL_GPIO_PIN_x`, `IOMUX_PINCMx`, or peripheral instances in component code when the resource belongs to board pinmux.
 - Use SysConfig + DriverLib for GPIO, UART, PWM, Timer, ADC, I2C, SPI, DMA, and clock setup.
-- Never edit generated files: `ti_msp_dl_config.c/h`, `Objects/`, `Listings/`, object files, maps.
+- Never edit generated files: `ti_msp_dl_config.c/h`, `Objects/`, `Listings/`, object files, maps. Update `.syscfg` and regenerate when possible; if generated files must be patched temporarily, state that it is provisional and must be regenerated from SysConfig.
 - Preserve `.syscfg` metadata (`@cliArgs`, `@v2CliArgs`, `@versions`, `--device`, `--package`).
 - Read `ti_msp_dl_config.h` for all generated macro names; do not guess.
 - Do not invent SysConfig fields, device metadata, or tool versions.
 - Preserve existing user code, comments, project layout, and `.syscfg` settings.
 - Do not change device, package, SDK, board without user confirmation.
 - Report SysConfig warnings separately from build/flash success.
+
+## SysConfig Editing Rules
+
+- Prefer editing `.syscfg` using patterns copied from the project's existing file or SDK examples for the same module.
+- For GPIO groups with multiple pins, create the pins before assigning index 1+:
+  ```js
+  GPIOx.associatedPins.create(2);
+  GPIOx.associatedPins[0].$name = "PIN_NAME_0";
+  GPIOx.associatedPins[0].pin.$assign = "PA28";
+  GPIOx.associatedPins[1].$name = "PIN_NAME_1";
+  GPIOx.associatedPins[1].pin.$assign = "PA31";
+  ```
+- Use `.pin.$assign = "PAxx"/"PBxx"` for pin assignment. Avoid legacy/guessed fields like `.assignedPin = "28"` unless the current project already generated them and SysConfig accepts them.
+- After editing `.syscfg`, verify it opens or regenerates before relying on generated macro names.
+- To regenerate without Keil GUI, prefer calling SysConfig's node CLI directly from the project root:
+  ```bash
+  /d/tool/CCS/sysconfig_desktop/nodejs/node.exe /d/tool/CCS/sysconfig_desktop/dist/cli.js -o . -s /d/tool/CCS/mspm0_sdk_2_10_00_04/.metadata/product.json --compiler keil main.syscfg
+  ```
+- Do not manually patch `ti_msp_dl_config.c/h` to change SysConfig-controlled values such as UART baud rate. If they are out of sync, fix `.syscfg` and regenerate.
 
 ## Board-Specific: Tianmengxing MSPM0G3507
 

@@ -131,8 +131,8 @@ void GROUP1_IRQHandler(void)
 {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-    if (DL_GPIO_getPendingInterrupt(GPIO_MPU6050_INT_PORT) == GPIO_MPU6050_INT_IIDX) {
-        DL_GPIO_clearInterruptStatus(GPIO_MPU6050_INT_PORT, GPIO_MPU6050_INT_PIN);
+    if (DL_GPIO_getPendingInterrupt(GPIO_MPU6050_INT_PORT) == GPIO_MPU6050_INT_PIN_MPU6050_INT_IIDX) {
+        DL_GPIO_clearInterruptStatus(GPIO_MPU6050_INT_PORT, GPIO_MPU6050_INT_PIN_MPU6050_INT_PIN);
         if (g_mpu_task_handle != NULL) {
             vTaskNotifyGiveFromISR(g_mpu_task_handle, &xHigherPriorityTaskWoken);
         }
