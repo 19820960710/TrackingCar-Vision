@@ -73,6 +73,8 @@ static void oled_task(void *pvParameters)
     OLED_ShowString(0, 32, "MPU6050 Wait", 16, 1);
     OLED_Refresh();
 
+    OLED_Clear();
+
     for (;;) {
         if (xQueueReceive(g_attitude_queue, &msg, portMAX_DELAY) == pdPASS) {
             if (msg.status != 0) {
@@ -89,7 +91,7 @@ static void oled_task(void *pvParameters)
             int roll_abs  = (msg.roll10  >= 0) ? msg.roll10  : -msg.roll10;
             int yaw_abs   = (msg.yaw10   >= 0) ? msg.yaw10   : -msg.yaw10;
 
-            OLED_Clear();
+            // OLED_Clear();
             OLED_ShowString(0, 0, "MPU6050 DMP", 16, 1);
             OLED_vsprint(0, 16, 16, "P:%c%d.%1d", (msg.pitch10 < 0) ? '-' : '+', pitch_abs / 10, pitch_abs % 10);
             OLED_vsprint(0, 32, 16, "R:%c%d.%1d", (msg.roll10 < 0) ? '-' : '+', roll_abs / 10, roll_abs % 10);
