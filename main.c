@@ -25,21 +25,9 @@ static void oled_task(void *pvParameters)
     uint32_t cnt = 0;
     char line[32];
 
-    /* 开机静态画面 */
-    OLED_ShowString(0, 0,  "MSPM0G3507", 16, 1);
-    OLED_ShowString(0, 16, "FreeRTOS OK", 16, 1);
-    OLED_ShowString(0, 32, "I2C0 OLED Demo", 16, 1);
-    OLED_Refresh();
-    vTaskDelay(pdMS_TO_TICKS(1500));
-
     for (;;) {
         OLED_Clear();
         OLED_ShowString(0, 0,  "OLED Test", 16, 1);
-        // OLED_ShowString(0, 16, "cnt:", 16, 1);
-        // OLED_ShowNum(40, 16, cnt, 5, 16, 1);
-        // snprintf(line, sizeof(line), "Heap:%u%%", (unsigned)((configTOTAL_HEAP_SIZE - xPortGetFreeHeapSize()) * 100 / configTOTAL_HEAP_SIZE));
-        // OLED_ShowString(0, 32, line, 16, 1);
-        // OLED_ShowString(0, 48, "PA28/PA31 I2C0", 12, 1);
         OLED_vsprint(0, 16,16, "cnt:%u", cnt);
         OLED_Refresh();
         cnt++;
