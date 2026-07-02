@@ -78,7 +78,7 @@ UART1.txPinConfig.$name        = "ti_driverlib_gpio_GPIOPinGeneric0";
 UART1.rxPinConfig.$name        = "ti_driverlib_gpio_GPIOPinGeneric1";
 
 /**
- * I2C0: PA28 SDA, PA31 SCL, Controller 模式, 标准速度 100kHz (接 SSD1306 OLED)
+ * I2C0: PA0 SDA, PA1 SCL, Controller 模式, 标准速度 100kHz (接 MPU6050)
  */
 I2C1.$name                              = "I2C_0";
 I2C1.basicEnableController              = true;
@@ -87,8 +87,8 @@ I2C1.basicClockSourceDivider            = 1;
 I2C1.basicControllerStandardBusSpeed    = "Standard";
 I2C1.basicEnableController10BitAddress  = false;
 I2C1.peripheral.$assign                 = "I2C0";
-I2C1.peripheral.sdaPin.$assign          = "PA28";
-I2C1.peripheral.sclPin.$assign          = "PA31";
+I2C1.peripheral.sdaPin.$assign          = "PA0";
+I2C1.peripheral.sclPin.$assign          = "PA1";
 
 /**
  * Board: debug interface
@@ -109,5 +109,5 @@ Board.peripheral.swclkPin.$suggestSolution   = "PA20";
 Board.peripheral.swdioPin.$suggestSolution   = "PA19";
 UART1.peripheral.$suggestSolution            = "UART0";
 I2C1.peripheral.$suggestSolution               = "I2C0";
-I2C1.peripheral.sdaPin.$suggestSolution         = "PA28";
-I2C1.peripheral.sclPin.$suggestSolution         = "PA31";
+I2C1.peripheral.sdaPin.$suggestSolution         = "PA0";
+I2C1.peripheral.sclPin.$suggestSolution         = "PA1";

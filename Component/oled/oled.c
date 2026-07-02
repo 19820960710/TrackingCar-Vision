@@ -1,9 +1,9 @@
 /**
  * @file    oled.c
- * @brief   SSD1306 OLED 128×64 硬件 I2C 显示屏驱动 (MSPM0G3507 移植版)
+ * @brief   SSD1306 OLED 128×64 软件 I2C 显示屏驱动 (MSPM0G3507 移植版)
  * @note    显存结构：OLED_GRAM[128][8]（横向 128 列 × 纵向 8 页，每页 8 行）
  *          所有绘图函数操作显存，调用 OLED_Refresh() 将显存刷新到屏幕
- *          I2C 物理层由 SysConfig 生成的 I2C_0 实例承担 (PA28=SDA, PA31=SCL)
+ *          软件 I2C：PA28=SDA，PA31=SCL；硬件 I2C0 留给 MPU6050
  */
 
 #include "oled.h"
@@ -16,104 +16,124 @@
 
 uint8_t OLED_GRAM[OLED_WIDTH][OLED_HEIGHT / 8U];  /* OLED 显存：128×8 字节 */
 
-/*
- * I2C 超时使用 busy-wait 迭代倒计时，与 FreeRTOS 调度器无关，
- * 因此在调度器启动前的初始化阶段（OLED_Init/OLED_Clear）同样生效。
- * 500000 次迭代约 30+ms @80MHz，足够覆盖 100kHz 下 129 字节页的整页传输。
- */
-#define OLED_I2C_TIMEOUT_LOOPS  500000U
+/* OLED 使用 PA28=SDA、PA31=SCL 软件 I2C；硬件 I2C0 留给 MPU6050(PA0/PA1)。 */
+#define OLED_SW_I2C_PORT       GPIOA
+#define OLED_SW_SDA_PIN        DL_GPIO_PIN_28
+#define OLED_SW_SCL_PIN        DL_GPIO_PIN_31
+#define OLED_SW_SDA_IOMUX      IOMUX_PINCM3
+#define OLED_SW_SCL_IOMUX      IOMUX_PINCM6
+#define OLED_SW_I2C_DELAY      (120U)
 
-/**
- * @brief  临时接管 SCL 为 GPIO 输出、SDA 为输入，手动极9 个 SCL 脉冲释放被从机拉低的 SDA 总线，
- *         再重新交由硬件 I2C 接管。
- * @note   仅在 SDA 被从机死死拉低、硬件控制器检测到不能产生 STOP 时调用。
- */
-void oled_i2c_sda_unlock(void)
+static void oled_i2c_delay(void)
 {
-    uint8_t cycleCnt = 0;
-
-    /* 卸载硬件 I2C，把 SCL/SDA 变为 GPIO 手动控制 */
-    DL_I2C_reset(I2C_0_INST);
-    DL_GPIO_initDigitalOutput(GPIO_I2C_0_IOMUX_SCL);
-    DL_GPIO_initDigitalInputFeatures(GPIO_I2C_0_IOMUX_SDA,
-        DL_GPIO_INVERSION_DISABLE, DL_GPIO_RESISTOR_NONE,
-        DL_GPIO_HYSTERESIS_DISABLE, DL_GPIO_WAKEUP_DISABLE);
-    DL_GPIO_clearPins(GPIO_I2C_0_SCL_PORT, GPIO_I2C_0_SCL_PIN);
-    DL_GPIO_enableOutput(GPIO_I2C_0_SCL_PORT, GPIO_I2C_0_SCL_PIN);
-
-    /* 手动输出最多 100 个 SCL 脉冲，直至 SDA 被释放为高 */
-    do {
-        DL_GPIO_clearPins(GPIO_I2C_0_SCL_PORT, GPIO_I2C_0_SCL_PIN);
-        delay_cycles(8000);  /* ~100us @80MHz */
-        DL_GPIO_setPins(GPIO_I2C_0_SCL_PORT, GPIO_I2C_0_SCL_PIN);
-        delay_cycles(8000);
-        if (DL_GPIO_readPins(GPIO_I2C_0_SDA_PORT, GPIO_I2C_0_SDA_PIN))
-            break;
-    } while (++cycleCnt < 100);
-
-    /* 恢复硬件 I2C 接管 */
-    DL_I2C_reset(I2C_0_INST);
-    DL_GPIO_initPeripheralInputFunctionFeatures(GPIO_I2C_0_IOMUX_SDA,
-        GPIO_I2C_0_IOMUX_SDA_FUNC, DL_GPIO_INVERSION_DISABLE,
-        DL_GPIO_RESISTOR_NONE, DL_GPIO_HYSTERESIS_DISABLE,
-        DL_GPIO_WAKEUP_DISABLE);
-    DL_GPIO_initPeripheralInputFunctionFeatures(GPIO_I2C_0_IOMUX_SCL,
-        GPIO_I2C_0_IOMUX_SCL_FUNC, DL_GPIO_INVERSION_DISABLE,
-        DL_GPIO_RESISTOR_NONE, DL_GPIO_HYSTERESIS_DISABLE,
-        DL_GPIO_WAKEUP_DISABLE);
-    DL_GPIO_enableHiZ(GPIO_I2C_0_IOMUX_SDA);
-    DL_GPIO_enableHiZ(GPIO_I2C_0_IOMUX_SCL);
-    DL_I2C_enablePower(I2C_0_INST);
-    SYSCFG_DL_I2C_0_init();
+    delay_cycles(OLED_SW_I2C_DELAY);
 }
 
-/**
- * @brief  通过硬件 I2C 向 SSD1306 发送一帧数据（控制器模式）
- * @param  buf  待发送数据缓冲（含控制字节）
- * @param  len  数据长度（字节）
- * @note   步骤（参考 TI 例程，T优先用 TX_DONE / TXFIFO_EMPTY 标志，避免状态位死等）：
- *         1) 等控制器 IDLE → 2) 预填 FIFO → 3) 清 TX_DONE 标志 →
- *         4) startControllerTransfer（声明本次总长度）→
- *         5) 以 TXFIFO_EMPTY 标志为节奏边传边填剩余字节 →
- *         6) 等待 TX_DONE 确认本次传输完成
- */
+static void oled_sda_release(void)
+{
+    DL_GPIO_disableOutput(OLED_SW_I2C_PORT, OLED_SW_SDA_PIN);
+}
+
+static void oled_sda_low(void)
+{
+    DL_GPIO_clearPins(OLED_SW_I2C_PORT, OLED_SW_SDA_PIN);
+    DL_GPIO_enableOutput(OLED_SW_I2C_PORT, OLED_SW_SDA_PIN);
+}
+
+static void oled_scl_release(void)
+{
+    DL_GPIO_disableOutput(OLED_SW_I2C_PORT, OLED_SW_SCL_PIN);
+}
+
+static void oled_scl_low(void)
+{
+    DL_GPIO_clearPins(OLED_SW_I2C_PORT, OLED_SW_SCL_PIN);
+    DL_GPIO_enableOutput(OLED_SW_I2C_PORT, OLED_SW_SCL_PIN);
+}
+
+static uint8_t oled_sda_read(void)
+{
+    return (DL_GPIO_readPins(OLED_SW_I2C_PORT, OLED_SW_SDA_PIN) != 0U) ? 1U : 0U;
+}
+
+static void oled_i2c_gpio_init(void)
+{
+    DL_GPIO_initDigitalOutput(OLED_SW_SDA_IOMUX);
+    DL_GPIO_initDigitalOutput(OLED_SW_SCL_IOMUX);
+    DL_GPIO_clearPins(OLED_SW_I2C_PORT, OLED_SW_SDA_PIN | OLED_SW_SCL_PIN);
+    DL_GPIO_disableOutput(OLED_SW_I2C_PORT, OLED_SW_SDA_PIN | OLED_SW_SCL_PIN);
+}
+
+void oled_i2c_sda_unlock(void)
+{
+    uint8_t cycleCnt = 0U;
+
+    oled_i2c_gpio_init();
+    do {
+        oled_scl_low();
+        delay_cycles(8000);
+        oled_scl_release();
+        delay_cycles(8000);
+        if (oled_sda_read()) {
+            break;
+        }
+    } while (++cycleCnt < 100U);
+}
+
+static void oled_i2c_start(void)
+{
+    oled_sda_release();
+    oled_scl_release();
+    oled_i2c_delay();
+    oled_sda_low();
+    oled_i2c_delay();
+    oled_scl_low();
+    oled_i2c_delay();
+}
+
+static void oled_i2c_stop(void)
+{
+    oled_sda_low();
+    oled_i2c_delay();
+    oled_scl_release();
+    oled_i2c_delay();
+    oled_sda_release();
+    oled_i2c_delay();
+}
+
+static void oled_i2c_write_byte(uint8_t data)
+{
+    for (uint8_t i = 0; i < 8U; i++) {
+        if (data & 0x80U) {
+            oled_sda_release();
+        } else {
+            oled_sda_low();
+        }
+        oled_i2c_delay();
+        oled_scl_release();
+        oled_i2c_delay();
+        oled_scl_low();
+        data <<= 1;
+        oled_i2c_delay();
+    }
+
+    /* 第 9 个时钟释放 SDA 让从机 ACK；这里不强制检查 ACK，避免显示任务被阻塞。 */
+    oled_sda_release();
+    oled_i2c_delay();
+    oled_scl_release();
+    oled_i2c_delay();
+    oled_scl_low();
+    oled_i2c_delay();
+}
+
 static void oled_i2c_transmit(const uint8_t *buf, uint16_t len)
 {
-    uint16_t sent;
-    uint32_t to;
-
-    /* 1) 预填 FIFO（受限于 FIFO 深度，返回实际填入数） */
-    sent = DL_I2C_fillControllerTXFIFO(I2C_0_INST, buf, len);
-
-    /* 2) 清 TX_DONE 标志，使本次传输结束后能检测到新事件 */
-    DL_I2C_clearInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_TX_DONE);
-
-    /* 3) 等控制器空闲（参考例程顺序：fill 后、start 前等 IDLE） */
-    to = OLED_I2C_TIMEOUT_LOOPS;
-    while (!(DL_I2C_getControllerStatus(I2C_0_INST) & DL_I2C_CONTROLLER_STATUS_IDLE)) {
-        if (--to == 0) { oled_i2c_sda_unlock(); return; }
+    oled_i2c_start();
+    oled_i2c_write_byte((uint8_t)(OLED_ADDR << 1));
+    for (uint16_t i = 0; i < len; i++) {
+        oled_i2c_write_byte(buf[i]);
     }
-
-    /* 4) 启动控制器传输，声明本次总字节数（超出 FIFO 深度时硬件会在传输中请求数据） */
-    DL_I2C_startControllerTransfer(I2C_0_INST, (uint32_t)OLED_ADDR,
-                                   DL_I2C_CONTROLLER_DIRECTION_TX, len);
-
-    /* 5) 以 TXFIFO_EMPTY 为节奏边传边填剩余字节（FIFO 整批排空再续填，零竞争，不花屏） */
-    while (sent < len) {
-        to = OLED_I2C_TIMEOUT_LOOPS;
-        while (!DL_I2C_getRawInterruptStatus(I2C_0_INST,
-                                             DL_I2C_INTERRUPT_CONTROLLER_TXFIFO_EMPTY)) {
-            if (--to == 0) { oled_i2c_sda_unlock(); return; }
-        }
-        sent += DL_I2C_fillControllerTXFIFO(I2C_0_INST, &buf[sent], len - sent);
-    }
-
-    /* 6) 等待 TX_DONE，确认本次传输真正结束 */
-    to = OLED_I2C_TIMEOUT_LOOPS;
-    while (!DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_TX_DONE)) {
-        if (--to == 0) { oled_i2c_sda_unlock(); break; }
-    }
-    DL_I2C_flushControllerTXFIFO(I2C_0_INST);
+    oled_i2c_stop();
 }
 
 /**
@@ -496,16 +516,18 @@ void OLED_ShowPicture(uint8_t x, uint8_t y, uint8_t sizex, uint8_t sizey, uint8_
 }
 
 /**
- * @brief  SSD1306 OLED 初始化（I2C 物理层由 SYSCFG_DL_I2C_0_init() 完成，此处仅发命令序列）
+ * @brief  SSD1306 OLED 初始化（PA28/PA31 软件 I2C，此处发命令序列）
  */
 void OLED_Init(void)
 {
+    oled_i2c_gpio_init();
+
     /* SSD1306 复位时可能拉低 SDA 导致总线死锁，先检测并软件释放 */
-    if (DL_I2C_getSDAStatus(I2C_0_INST) == DL_I2C_CONTROLLER_SDA_LOW)
+    if (!oled_sda_read())
         oled_i2c_sda_unlock();
 
     /* 复位后等待稳定 */
-    delay_cycles(80000 * 2);  /* ~2ms @80MHz */
+    delay_cycles(CPUCLK_FREQ / 2); /* 500ms @ 80MHz */
 
     OLED_WR_Byte(0xAE, OLED_CMD); // display off
     OLED_WR_Byte(0x00, OLED_CMD); // set low column address
