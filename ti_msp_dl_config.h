@@ -109,11 +109,28 @@ bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 
 
 
+
+/* Defines for QEI_ENCODER_LEFT */
+#define QEI_ENCODER_LEFT_INST                                              TIMG8
+#define QEI_ENCODER_LEFT_INST_IRQHandler                        TIMG8_IRQHandler
+#define QEI_ENCODER_LEFT_INST_INT_IRQN                          (TIMG8_INT_IRQn)
+/* Pin configuration defines for QEI_ENCODER_LEFT PHA Pin */
+#define GPIO_QEI_ENCODER_LEFT_PHA_PORT                                     GPIOA
+#define GPIO_QEI_ENCODER_LEFT_PHA_PIN                             DL_GPIO_PIN_26
+#define GPIO_QEI_ENCODER_LEFT_PHA_IOMUX                          (IOMUX_PINCM59)
+#define GPIO_QEI_ENCODER_LEFT_PHA_IOMUX_FUNC             IOMUX_PINCM59_PF_TIMG8_CCP0
+/* Pin configuration defines for QEI_ENCODER_LEFT PHB Pin */
+#define GPIO_QEI_ENCODER_LEFT_PHB_PORT                                     GPIOA
+#define GPIO_QEI_ENCODER_LEFT_PHB_PIN                             DL_GPIO_PIN_27
+#define GPIO_QEI_ENCODER_LEFT_PHB_IOMUX                          (IOMUX_PINCM60)
+#define GPIO_QEI_ENCODER_LEFT_PHB_IOMUX_FUNC             IOMUX_PINCM60_PF_TIMG8_CCP1
+
+
 /* Defines for TIMER_0 */
 #define TIMER_0_INST                                                    (TIMG12)
 #define TIMER_0_INST_IRQHandler                                TIMG12_IRQHandler
 #define TIMER_0_INST_INT_IRQN                                  (TIMG12_INT_IRQn)
-#define TIMER_0_INST_LOAD_VALUE                                         (79999U)
+#define TIMER_0_INST_LOAD_VALUE                                        (799999U)
 
 
 
@@ -201,6 +218,20 @@ bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 #define GPIO_TB6612_PIN_BIN2_PORT                                        (GPIOB)
 #define GPIO_TB6612_PIN_BIN2_PIN                                (DL_GPIO_PIN_24)
 #define GPIO_TB6612_PIN_BIN2_IOMUX                               (IOMUX_PINCM52)
+/* Port definition for Pin Group GPIO_ENCODER_RIGHT */
+#define GPIO_ENCODER_RIGHT_PORT                                          (GPIOA)
+
+/* Defines for PIN_RIGHT_A: GPIOA.25 with pinCMx 55 on package pin 26 */
+// pins affected by this interrupt request:["PIN_RIGHT_A","PIN_RIGHT_B"]
+#define GPIO_ENCODER_RIGHT_INT_IRQN                             (GPIOA_INT_IRQn)
+#define GPIO_ENCODER_RIGHT_INT_IIDX             (DL_INTERRUPT_GROUP1_IIDX_GPIOA)
+#define GPIO_ENCODER_RIGHT_PIN_RIGHT_A_IIDX                 (DL_GPIO_IIDX_DIO25)
+#define GPIO_ENCODER_RIGHT_PIN_RIGHT_A_PIN                      (DL_GPIO_PIN_25)
+#define GPIO_ENCODER_RIGHT_PIN_RIGHT_A_IOMUX                     (IOMUX_PINCM55)
+/* Defines for PIN_RIGHT_B: GPIOA.14 with pinCMx 36 on package pin 7 */
+#define GPIO_ENCODER_RIGHT_PIN_RIGHT_B_IIDX                 (DL_GPIO_IIDX_DIO14)
+#define GPIO_ENCODER_RIGHT_PIN_RIGHT_B_PIN                      (DL_GPIO_PIN_14)
+#define GPIO_ENCODER_RIGHT_PIN_RIGHT_B_IOMUX                     (IOMUX_PINCM36)
 
 
 /* clang-format on */
@@ -212,6 +243,7 @@ void SYSCFG_DL_SYSCTL_init(void);
 
 bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 void SYSCFG_DL_PWM_TB6612_init(void);
+void SYSCFG_DL_QEI_ENCODER_LEFT_init(void);
 void SYSCFG_DL_TIMER_0_init(void);
 void SYSCFG_DL_I2C_0_init(void);
 void SYSCFG_DL_UART_0_init(void);

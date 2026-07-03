@@ -611,6 +611,21 @@
             </File>
           </Files>
         </Group>
+        <Group>
+          <GroupName>Component/encoder</GroupName>
+          <Files>
+            <File>
+              <FileName>encoder.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/encoder/encoder.c</FilePath>
+            </File>
+            <File>
+              <FileName>encoder.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/encoder/encoder.h</FilePath>
+            </File>
+          </Files>
+        </Group>
       </Groups>
     </Target>
   </Targets>

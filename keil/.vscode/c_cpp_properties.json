@@ -13,7 +13,8 @@
                 "c:\\Users\\iwiwb\\Desktop\\My_M0_Proj\\M0_Templant_FreeRTOS\\Component\\UART",
                 "c:\\Users\\iwiwb\\Desktop\\My_M0_Proj\\M0_Templant_FreeRTOS\\Component\\oled",
                 "c:\\Users\\iwiwb\\Desktop\\My_M0_Proj\\M0_Templant_FreeRTOS\\Component\\mpu6050",
-                "c:\\Users\\iwiwb\\Desktop\\My_M0_Proj\\M0_Templant_FreeRTOS\\Component\\tb6612"
+                "c:\\Users\\iwiwb\\Desktop\\My_M0_Proj\\M0_Templant_FreeRTOS\\Component\\tb6612",
+                "c:\\Users\\iwiwb\\Desktop\\My_M0_Proj\\M0_Templant_FreeRTOS\\Component\\encoder"
             ],
             "defines": [
                 "__MSPM0G3507__",
