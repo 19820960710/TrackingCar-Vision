@@ -7,6 +7,7 @@
 #include "queue.h"
 #include "ti_msp_dl_config.h"
 #include "led/led.h"
+#include "led/key.h"
 #include "UART/uart0.h"
 #include "oled/oled.h"
 #include "mpu6050/mpu6050.h"
@@ -19,6 +20,18 @@ typedef struct {
     float roll10;
     float yaw10;
 } attitude_msg_t;
+
+/* 电机状态枚举 */
+typedef enum {
+    MOTOR_STOP = 0,
+    MOTOR_FORWARD,
+    MOTOR_BACKWARD,
+    MOTOR_LEFT,
+    MOTOR_RIGHT,
+    MOTOR_STATE_COUNT
+} motor_state_t;
+
+static QueueHandle_t g_motor_state_queue = NULL;
 
 static QueueHandle_t g_attitude_queue = NULL;
 static TaskHandle_t g_mpu_task_handle = NULL;
@@ -69,83 +82,100 @@ static void oled_task(void *pvParameters)
 {
     (void)pvParameters;
     attitude_msg_t msg;
-    uint8_t oled_clear_flag = 0;
+    motor_state_t motor_state = MOTOR_STOP;
+    uint8_t clear_flag = 0;
     OLED_Init();
     OLED_Clear();
 
     for (;;) {
-        if (xQueueReceive(g_attitude_queue, &msg, portMAX_DELAY) == pdPASS) {
+        motor_state_t new_state;
+        if (xQueueReceive(g_motor_state_queue, &new_state, 0) == pdPASS) {
+            motor_state = new_state;
+        }
+
+        if (xQueueReceive(g_attitude_queue, &msg, pdMS_TO_TICKS(100)) == pdPASS) {
+            clear_flag++;
+            if (clear_flag > 10) {
+                clear_flag = 0;
+                OLED_Clear();
+            }
+
             if (msg.status != 0) {
-                OLED_Clear();
-                OLED_ShowString(0, 0, "MPU6050 ERR", 16, 1);
-                OLED_Refresh();
-                continue;
+                OLED_ShowString(0, 0, "MPU ERR", 16, 1);
+            } else {
+                switch (motor_state) {
+                case MOTOR_STOP:     OLED_ShowString(0, 0, "STOP",      16, 1); break;
+                case MOTOR_FORWARD:  OLED_ShowString(0, 0, "FWD  70%",  16, 1); break;
+                case MOTOR_BACKWARD: OLED_ShowString(0, 0, "REV  70%",  16, 1); break;
+                case MOTOR_LEFT:     OLED_ShowString(0, 0, "TURN L",    16, 1); break;
+                case MOTOR_RIGHT:    OLED_ShowString(0, 0, "TURN R",    16, 1); break;
+                default: break;
+                }
             }
-            oled_clear_flag++;
-            if (oled_clear_flag > 10) {
-                oled_clear_flag = 0;
-                OLED_Clear();
+
+            if (msg.status == 0) {
+                OLED_vsprint(0, 16, 16, "P:%.2f", msg.pitch10);
+                OLED_vsprint(0, 32, 16, "R:%.2f", msg.roll10);
+                OLED_vsprint(0, 48, 16, "Y:%.2f", msg.yaw10);
             }
-            OLED_ShowString(0, 0, "MPU6050 DMP", 16, 1);
-            OLED_vsprint(0, 16, 16, "P:%.2f", msg.pitch10 );
-            OLED_vsprint(0, 32, 16, "R:%.2f", msg.roll10);
-            OLED_vsprint(0, 48, 16, "Y:%.2f", msg.yaw10);
             OLED_Refresh();
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
-/* ── TB6612 电机驱动测试任务 ── */
+/* ── TB6612 电机测试任务（PB21 按键切换状态）── */
 static void tb6612_test_task(void *pvParameters)
 {
     (void)pvParameters;
+    motor_state_t state = MOTOR_STOP;
+    motor_state_t last = MOTOR_STOP;
+    bool key_was = false;
 
-    /* 等待系统稳定 */
-    vTaskDelay(pdMS_TO_TICKS(2000));
-
-    uart0_sendStr("[TB6612] 测试开始\r\n");
+    tb6612_stop();
+    vTaskDelay(pdMS_TO_TICKS(500));
+    xQueueOverwrite(g_motor_state_queue, &state);
 
     for (;;) {
-        /* 1. 前进 */
-        uart0_sendStr("[TB6612] 前进 50%%\r\n");
-        tb6612_set_speed(50, 50);
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        bool key_now = key_read_user();
 
-        /* 2. 停止 */
-        uart0_sendStr("[TB6612] 停止\r\n");
-        tb6612_stop();
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        if (key_now && !key_was) {
+            state = (motor_state_t)(((int)state + 1) % MOTOR_STATE_COUNT);
+        }
+        key_was = key_now;
 
-        /* 3. 后退 */
-        uart0_sendStr("[TB6612] 后退 50%%\r\n");
-        tb6612_set_speed(-50, -50);
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        if (state != last) {
+            last = state;
+            switch (state) {
+            case MOTOR_STOP:
+                tb6612_stop();
+                break;
+            case MOTOR_FORWARD:
+                tb6612_set_speed(100, 100);
+                vTaskDelay(pdMS_TO_TICKS(80));
+                tb6612_set_speed(70, 70);
+                break;
+            case MOTOR_BACKWARD:
+                tb6612_set_speed(-100, -100);
+                vTaskDelay(pdMS_TO_TICKS(80));
+                tb6612_set_speed(-70, -70);
+                break;
+            case MOTOR_LEFT:
+                tb6612_set_speed(-100, 100);
+                vTaskDelay(pdMS_TO_TICKS(80));
+                tb6612_set_speed(-60, 60);
+                break;
+            case MOTOR_RIGHT:
+                tb6612_set_speed(100, -100);
+                vTaskDelay(pdMS_TO_TICKS(80));
+                tb6612_set_speed(60, -60);
+                break;
+            default:
+                break;
+            }
+            xQueueOverwrite(g_motor_state_queue, &state);
+        }
 
-        /* 4. 停止 */
-        uart0_sendStr("[TB6612] 停止\r\n");
-        tb6612_stop();
-        vTaskDelay(pdMS_TO_TICKS(1000));
-
-        /* 5. 左转 */
-        uart0_sendStr("[TB6612] 左转\r\n");
-        tb6612_set_speed(-40, 40);
-        vTaskDelay(pdMS_TO_TICKS(2000));
-
-        /* 6. 停止 */
-        uart0_sendStr("[TB6612] 停止\r\n");
-        tb6612_stop();
-        vTaskDelay(pdMS_TO_TICKS(1000));
-
-        /* 7. 右转 */
-        uart0_sendStr("[TB6612] 右转\r\n");
-        tb6612_set_speed(40, -40);
-        vTaskDelay(pdMS_TO_TICKS(2000));
-
-        /* 8. 停止，循环 */
-        uart0_sendStr("[TB6612] 停止\r\n");
-        tb6612_stop();
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(30));
     }
 }
 
@@ -157,6 +187,7 @@ static void prvSetupHardware(void)
     MPU6050_IntEnable();
 
     led_init();
+    key_init();
     uart0_init();
     tb6612_init();
 }
@@ -168,7 +199,8 @@ int main(void)
     uart0_sendStr("M0_Templant_FreeRTOS Ready | 80MHz\r\n");
 
     g_attitude_queue = xQueueCreate(1, sizeof(attitude_msg_t));
-    if (g_attitude_queue == NULL) {
+    g_motor_state_queue = xQueueCreate(1, sizeof(motor_state_t));
+    if (g_attitude_queue == NULL || g_motor_state_queue == NULL) {
         while (1) {}
     }
 
@@ -177,7 +209,7 @@ int main(void)
     xTaskCreate(uart0_Recive_task, "UART_Recv",  256, NULL, 1, NULL);
     xTaskCreate(mpu_task,          "MPU",       512, NULL, 2, &g_mpu_task_handle);
     xTaskCreate(oled_task,         "OLED",       512, NULL, 1, NULL);
-    xTaskCreate(tb6612_test_task,  "TB6612_TEST",256, NULL, 1, NULL);
+    xTaskCreate(tb6612_test_task,  "TB6612_TEST",256, NULL, 2, NULL);
 
     vTaskStartScheduler();
 

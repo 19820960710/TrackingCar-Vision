@@ -14,6 +14,7 @@ const GPIO1  = GPIO.addInstance();
 const GPIO2  = GPIO.addInstance();
 const GPIO3  = GPIO.addInstance();
 const GPIO4  = GPIO.addInstance();
+const GPIO5  = GPIO.addInstance();
 const I2C    = scripting.addModule("/ti/driverlib/I2C", {}, false);
 const PWM    = scripting.addModule("/ti/driverlib/PWM", {}, false);
 const PWM1   = PWM.addInstance();
@@ -85,6 +86,12 @@ GPIO4.associatedPins[2].$name       = "PIN_BIN1";
 GPIO4.associatedPins[2].pin.$assign = "PA16";
 GPIO4.associatedPins[3].$name       = "PIN_BIN2";
 GPIO4.associatedPins[3].pin.$assign = "PB24";
+
+GPIO5.$name                               = "GPIO_KEY_USER";
+GPIO5.associatedPins[0].$name             = "PIN_KEY_USER";
+GPIO5.associatedPins[0].direction         = "INPUT";
+GPIO5.associatedPins[0].internalResistor  = "PULL_UP";
+GPIO5.associatedPins[0].pin.$assign       = "PB21";
 
 PWM1.$name                      = "PWM_TB6612";
 PWM1.clockPrescale              = 1;

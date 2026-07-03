@@ -170,6 +170,12 @@ bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 #define GPIO_MPU6050_INT_PIN_MPU6050_INT_IIDX                (DL_GPIO_IIDX_DIO4)
 #define GPIO_MPU6050_INT_PIN_MPU6050_INT_PIN                     (DL_GPIO_PIN_4)
 #define GPIO_MPU6050_INT_PIN_MPU6050_INT_IOMUX                   (IOMUX_PINCM17)
+/* Port definition for Pin Group GPIO_KEY_USER */
+#define GPIO_KEY_USER_PORT                                               (GPIOB)
+
+/* Defines for PIN_KEY_USER: GPIOB.21 with pinCMx 49 on package pin 20 */
+#define GPIO_KEY_USER_PIN_KEY_USER_PIN                          (DL_GPIO_PIN_21)
+#define GPIO_KEY_USER_PIN_KEY_USER_IOMUX                         (IOMUX_PINCM49)
 /* Port definition for Pin Group GPIO_OLED_SW_I2C */
 #define GPIO_OLED_SW_I2C_PORT                                            (GPIOA)
 
