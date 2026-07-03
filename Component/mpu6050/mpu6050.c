@@ -228,6 +228,7 @@ int MPU6050_IsReady(void)
 void MPU6050_IntEnable(void)
 {
     NVIC_ClearPendingIRQ(MPU6050_INT_IRQN);
+    NVIC_SetPriority(MPU6050_INT_IRQN, 3);
     NVIC_EnableIRQ(MPU6050_INT_IRQN);
 }
 

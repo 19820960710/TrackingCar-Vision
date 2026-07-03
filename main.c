@@ -12,6 +12,7 @@
 #include "oled/oled.h"
 #include "mpu6050/mpu6050.h"
 #include "tb6612/tb6612.h"
+#include "encoder/encoder.h"
 #include <stdio.h>
 
 typedef struct {
@@ -32,6 +33,7 @@ typedef enum {
 } motor_state_t;
 
 static QueueHandle_t g_motor_state_queue = NULL;
+static QueueHandle_t g_encoder_queue = NULL;
 
 static QueueHandle_t g_attitude_queue = NULL;
 static TaskHandle_t g_mpu_task_handle = NULL;
@@ -84,45 +86,39 @@ static void mpu_task(void *pvParameters)
 static void oled_task(void *pvParameters)
 {
     (void)pvParameters;
-    attitude_msg_t msg;
     motor_state_t motor_state = MOTOR_STOP;
-    uint8_t clear_flag = 0;
+    encoder_data_t encoder = {0};
+
     OLED_Init();
     OLED_Clear();
 
     for (;;) {
         motor_state_t new_state;
+        encoder_data_t new_encoder;
+
         if (xQueueReceive(g_motor_state_queue, &new_state, 0) == pdPASS) {
             motor_state = new_state;
         }
-
-        if (xQueueReceive(g_attitude_queue, &msg, pdMS_TO_TICKS(100)) == pdPASS) {
-            clear_flag++;
-            if (clear_flag > 10) {
-                clear_flag = 0;
-                OLED_Clear();
-            }
-
-            if (msg.status != 0) {
-                OLED_ShowString(0, 0, "MPU ERR", 16, 1);
-            } else {
-                switch (motor_state) {
-                case MOTOR_STOP:     OLED_ShowString(0, 0, "STOP",      16, 1); break;
-                case MOTOR_FORWARD:  OLED_ShowString(0, 0, "FWD  70%",  16, 1); break;
-                case MOTOR_BACKWARD: OLED_ShowString(0, 0, "REV  70%",  16, 1); break;
-                case MOTOR_LEFT:     OLED_ShowString(0, 0, "TURN L",    16, 1); break;
-                case MOTOR_RIGHT:    OLED_ShowString(0, 0, "TURN R",    16, 1); break;
-                default: break;
-                }
-            }
-
-            if (msg.status == 0) {
-                OLED_vsprint(0, 16, 16, "P:%.2f", msg.pitch10);
-                OLED_vsprint(0, 32, 16, "R:%.2f", msg.roll10);
-                OLED_vsprint(0, 48, 16, "Y:%.2f", msg.yaw10);
-            }
-            OLED_Refresh();
+        if (xQueueReceive(g_encoder_queue, &new_encoder, 0) == pdPASS) {
+            encoder = new_encoder;
         }
+
+        OLED_Clear();
+        switch (motor_state) {
+        case MOTOR_STOP:     OLED_ShowString(0, 0, "STOP",      16, 1); break;
+        case MOTOR_FORWARD:  OLED_ShowString(0, 0, "FWD  70%",  16, 1); break;
+        case MOTOR_BACKWARD: OLED_ShowString(0, 0, "REV  70%",  16, 1); break;
+        case MOTOR_LEFT:     OLED_ShowString(0, 0, "TURN L",    16, 1); break;
+        case MOTOR_RIGHT:    OLED_ShowString(0, 0, "TURN R",    16, 1); break;
+        default:             OLED_ShowString(0, 0, "UNKNOWN",   16, 1); break;
+        }
+
+        OLED_vsprint(0, 16, 16, "L:%ld",  (long)encoder.left_count);
+        OLED_vsprint(0, 32, 16, "R:%ld",  (long)encoder.right_count);
+        OLED_vsprint(0, 48, 16, "d:%ld/%ld", (long)encoder.left_delta, (long)encoder.right_delta);
+        OLED_Refresh();
+
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -133,10 +129,12 @@ static void tb6612_test_task(void *pvParameters)
     motor_state_t state = MOTOR_STOP;
     motor_state_t last = MOTOR_STOP;
     bool key_was = false;
+    TickType_t last_encoder_read = xTaskGetTickCount();
 
     tb6612_stop();
     vTaskDelay(pdMS_TO_TICKS(500));
     xQueueOverwrite(g_motor_state_queue, &state);
+    encoder_reset();
 
     for (;;) {
         bool key_now = key_read_user();
@@ -145,6 +143,13 @@ static void tb6612_test_task(void *pvParameters)
             state = (motor_state_t)(((int)state + 1) % MOTOR_STATE_COUNT);
         }
         key_was = key_now;
+
+        if ((xTaskGetTickCount() - last_encoder_read) >= pdMS_TO_TICKS(100)) {
+            encoder_data_t encoder;
+            last_encoder_read = xTaskGetTickCount();
+            encoder_get_data(&encoder);
+            xQueueOverwrite(g_encoder_queue, &encoder);
+        }
 
         if (state != last) {
             last = state;
@@ -155,22 +160,22 @@ static void tb6612_test_task(void *pvParameters)
             case MOTOR_FORWARD:
                 tb6612_set_speed(100, 100);
                 vTaskDelay(pdMS_TO_TICKS(80));
-                tb6612_set_speed(70, 70);
+                tb6612_set_speed(30, 30);
                 break;
             case MOTOR_BACKWARD:
                 tb6612_set_speed(-100, -100);
                 vTaskDelay(pdMS_TO_TICKS(80));
-                tb6612_set_speed(-70, -70);
+                tb6612_set_speed(-30, -30);
                 break;
             case MOTOR_LEFT:
-                tb6612_set_speed(-100, 100);
-                vTaskDelay(pdMS_TO_TICKS(80));
-                tb6612_set_speed(-60, 60);
-                break;
-            case MOTOR_RIGHT:
                 tb6612_set_speed(100, -100);
                 vTaskDelay(pdMS_TO_TICKS(80));
-                tb6612_set_speed(60, -60);
+                tb6612_set_speed(20, -20);
+                break;
+            case MOTOR_RIGHT:
+                tb6612_set_speed(-100, 100);
+                vTaskDelay(pdMS_TO_TICKS(80));
+                tb6612_set_speed(-20, 20);
                 break;
             default:
                 break;
@@ -193,6 +198,7 @@ static void prvSetupHardware(void)
     key_init();
     uart0_init();
     tb6612_init();
+    encoder_init();
 }
 
 int main(void)
@@ -203,7 +209,8 @@ int main(void)
 
     g_attitude_queue = xQueueCreate(1, sizeof(attitude_msg_t));
     g_motor_state_queue = xQueueCreate(1, sizeof(motor_state_t));
-    if (g_attitude_queue == NULL || g_motor_state_queue == NULL) {
+    g_encoder_queue = xQueueCreate(1, sizeof(encoder_data_t));
+    if (g_attitude_queue == NULL || g_motor_state_queue == NULL || g_encoder_queue == NULL) {
         while (1) {}
     }
 
@@ -223,6 +230,10 @@ int main(void)
 void GROUP1_IRQHandler(void)
 {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    if (encoder_right_int_is_pending()) {
+        encoder_right_irq_handler();
+    }
 
     if (MPU6050_IntIsPending()) {
         MPU6050_IntClear();

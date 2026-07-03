@@ -40,6 +40,8 @@
 
 #include "ti_msp_dl_config.h"
 
+DL_TimerG_backupConfig gQEI_ENCODER_LEFTBackup;
+
 /*
  *  ======== SYSCFG_DL_init ========
  *  Perform any initialization needed before using any board APIs
@@ -51,18 +53,46 @@ SYSCONFIG_WEAK void SYSCFG_DL_init(void)
     /* Module-Specific Initializations*/
     SYSCFG_DL_SYSCTL_init();
     SYSCFG_DL_PWM_TB6612_init();
+    SYSCFG_DL_QEI_ENCODER_LEFT_init();
     SYSCFG_DL_TIMER_0_init();
     SYSCFG_DL_I2C_0_init();
     SYSCFG_DL_UART_0_init();
+    /* Ensure backup structures have no valid state */
+
+	gQEI_ENCODER_LEFTBackup.backupRdy 	= false;
+
+
+
+}
+/*
+ * User should take care to save and restore register configuration in application.
+ * See Retention Configuration section for more details.
+ */
+SYSCONFIG_WEAK bool SYSCFG_DL_saveConfiguration(void)
+{
+    bool retStatus = true;
+
+	retStatus &= DL_TimerG_saveConfiguration(QEI_ENCODER_LEFT_INST, &gQEI_ENCODER_LEFTBackup);
+
+    return retStatus;
 }
 
 
+SYSCONFIG_WEAK bool SYSCFG_DL_restoreConfiguration(void)
+{
+    bool retStatus = true;
+
+	retStatus &= DL_TimerG_restoreConfiguration(QEI_ENCODER_LEFT_INST, &gQEI_ENCODER_LEFTBackup, false);
+
+    return retStatus;
+}
 
 SYSCONFIG_WEAK void SYSCFG_DL_initPower(void)
 {
     DL_GPIO_reset(GPIOA);
     DL_GPIO_reset(GPIOB);
     DL_TimerG_reset(PWM_TB6612_INST);
+    DL_TimerG_reset(QEI_ENCODER_LEFT_INST);
     DL_TimerG_reset(TIMER_0_INST);
     DL_I2C_reset(I2C_0_INST);
     DL_UART_Main_reset(UART_0_INST);
@@ -70,6 +100,7 @@ SYSCONFIG_WEAK void SYSCFG_DL_initPower(void)
     DL_GPIO_enablePower(GPIOA);
     DL_GPIO_enablePower(GPIOB);
     DL_TimerG_enablePower(PWM_TB6612_INST);
+    DL_TimerG_enablePower(QEI_ENCODER_LEFT_INST);
     DL_TimerG_enablePower(TIMER_0_INST);
     DL_I2C_enablePower(I2C_0_INST);
     DL_UART_Main_enablePower(UART_0_INST);
@@ -86,6 +117,9 @@ SYSCONFIG_WEAK void SYSCFG_DL_GPIO_init(void)
     DL_GPIO_enableOutput(GPIO_PWM_TB6612_C0_PORT, GPIO_PWM_TB6612_C0_PIN);
     DL_GPIO_initPeripheralOutputFunction(GPIO_PWM_TB6612_C1_IOMUX,GPIO_PWM_TB6612_C1_IOMUX_FUNC);
     DL_GPIO_enableOutput(GPIO_PWM_TB6612_C1_PORT, GPIO_PWM_TB6612_C1_PIN);
+
+    DL_GPIO_initPeripheralInputFunction(GPIO_QEI_ENCODER_LEFT_PHA_IOMUX,GPIO_QEI_ENCODER_LEFT_PHA_IOMUX_FUNC);
+    DL_GPIO_initPeripheralInputFunction(GPIO_QEI_ENCODER_LEFT_PHB_IOMUX,GPIO_QEI_ENCODER_LEFT_PHB_IOMUX_FUNC);
 
     DL_GPIO_initPeripheralInputFunctionFeatures(GPIO_I2C_0_IOMUX_SDA,
         GPIO_I2C_0_IOMUX_SDA_FUNC, DL_GPIO_INVERSION_DISABLE,
@@ -125,12 +159,26 @@ SYSCONFIG_WEAK void SYSCFG_DL_GPIO_init(void)
 
     DL_GPIO_initDigitalOutput(GPIO_TB6612_PIN_BIN2_IOMUX);
 
+    DL_GPIO_initDigitalInputFeatures(GPIO_ENCODER_RIGHT_PIN_RIGHT_A_IOMUX,
+		 DL_GPIO_INVERSION_DISABLE, DL_GPIO_RESISTOR_PULL_UP,
+		 DL_GPIO_HYSTERESIS_DISABLE, DL_GPIO_WAKEUP_DISABLE);
+
+    DL_GPIO_initDigitalInputFeatures(GPIO_ENCODER_RIGHT_PIN_RIGHT_B_IOMUX,
+		 DL_GPIO_INVERSION_DISABLE, DL_GPIO_RESISTOR_PULL_UP,
+		 DL_GPIO_HYSTERESIS_DISABLE, DL_GPIO_WAKEUP_DISABLE);
+
     DL_GPIO_clearPins(GPIOA, GPIO_OLED_SW_I2C_PIN_OLED_SDA_PIN |
 		GPIO_OLED_SW_I2C_PIN_OLED_SCL_PIN |
 		GPIO_TB6612_PIN_BIN1_PIN);
     DL_GPIO_enableOutput(GPIOA, GPIO_OLED_SW_I2C_PIN_OLED_SDA_PIN |
 		GPIO_OLED_SW_I2C_PIN_OLED_SCL_PIN |
 		GPIO_TB6612_PIN_BIN1_PIN);
+    DL_GPIO_setLowerPinsPolarity(GPIOA, DL_GPIO_PIN_14_EDGE_RISE_FALL);
+    DL_GPIO_setUpperPinsPolarity(GPIOA, DL_GPIO_PIN_25_EDGE_RISE_FALL);
+    DL_GPIO_clearInterruptStatus(GPIOA, GPIO_ENCODER_RIGHT_PIN_RIGHT_A_PIN |
+		GPIO_ENCODER_RIGHT_PIN_RIGHT_B_PIN);
+    DL_GPIO_enableInterrupt(GPIOA, GPIO_ENCODER_RIGHT_PIN_RIGHT_A_PIN |
+		GPIO_ENCODER_RIGHT_PIN_RIGHT_B_PIN);
     DL_GPIO_clearPins(GPIOB, LED_PIN_22_PIN |
 		GPIO_TB6612_PIN_AIN1_PIN |
 		GPIO_TB6612_PIN_AIN2_PIN |
@@ -255,7 +303,7 @@ SYSCONFIG_WEAK void SYSCFG_DL_SYSCTL_init(void)
     DL_SYSCTL_enableMFCLK();
     DL_SYSCTL_setMCLKSource(SYSOSC, HSCLK, DL_SYSCTL_HSCLK_SOURCE_SYSPLL);
     /* INT_GROUP1 Priority */
-    NVIC_SetPriority(GPIOB_INT_IRQn, 3);
+    NVIC_SetPriority(GPIOA_INT_IRQn, 3);
 
 }
 
@@ -310,6 +358,27 @@ SYSCONFIG_WEAK void SYSCFG_DL_PWM_TB6612_init(void) {
     DL_TimerG_setCCPDirection(PWM_TB6612_INST , DL_TIMER_CC0_OUTPUT | DL_TIMER_CC1_OUTPUT );
 
 
+}
+
+
+static const DL_TimerG_ClockConfig gQEI_ENCODER_LEFTClockConfig = {
+    .clockSel = DL_TIMER_CLOCK_BUSCLK,
+    .divideRatio = DL_TIMER_CLOCK_DIVIDE_1,
+    .prescale = 0U
+};
+
+
+SYSCONFIG_WEAK void SYSCFG_DL_QEI_ENCODER_LEFT_init(void) {
+
+    DL_TimerG_setClockConfig(
+        QEI_ENCODER_LEFT_INST, (DL_TimerG_ClockConfig *) &gQEI_ENCODER_LEFTClockConfig);
+
+    DL_TimerG_configQEI(QEI_ENCODER_LEFT_INST, DL_TIMER_QEI_MODE_2_INPUT,
+        DL_TIMER_CC_INPUT_INV_NOINVERT, DL_TIMER_CC_0_INDEX);
+    DL_TimerG_configQEI(QEI_ENCODER_LEFT_INST, DL_TIMER_QEI_MODE_2_INPUT,
+        DL_TIMER_CC_INPUT_INV_NOINVERT, DL_TIMER_CC_1_INDEX);
+    DL_TimerG_setLoadValue(QEI_ENCODER_LEFT_INST, 65535);
+    DL_TimerG_enableClock(QEI_ENCODER_LEFT_INST);
 }
 
 
