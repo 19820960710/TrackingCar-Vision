@@ -55,6 +55,9 @@ static void mpu_task(void *pvParameters)
     (void)pvParameters;
     attitude_msg_t msg = {0};
 
+    /* 上电后 MPU6050 需要约 50-100ms 稳定，MSPM0 启动太快会读到 ERR */
+    vTaskDelay(pdMS_TO_TICKS(200));
+
     msg.status = MPU6050_Init();
     if (msg.status != 0) {
         xQueueOverwrite(g_attitude_queue, &msg);
@@ -205,8 +208,8 @@ int main(void)
     }
 
     xTaskCreate(led_task,          "LED",        128, NULL, 1, NULL);
-    xTaskCreate(uart0_Send_task,   "UART_Send",  256, NULL, 1, NULL);
-    xTaskCreate(uart0_Recive_task, "UART_Recv",  256, NULL, 1, NULL);
+    // xTaskCreate(uart0_Send_task,   "UART_Send",  256, NULL, 1, NULL);
+    // xTaskCreate(uart0_Recive_task, "UART_Recv",  256, NULL, 1, NULL);
     xTaskCreate(mpu_task,          "MPU",       512, NULL, 2, &g_mpu_task_handle);
     xTaskCreate(oled_task,         "OLED",       512, NULL, 1, NULL);
     xTaskCreate(tb6612_test_task,  "TB6612_TEST",256, NULL, 2, NULL);
