@@ -36,15 +36,6 @@ void uart0_sendStr(const char *str)
     uart0_txUnlock();
 }
 
-bool uart0_recvByte(uint8_t *byte, uint32_t timeout_ms)
-{
-    if (byte == NULL || xRxQueue == NULL) {
-        return false;
-    }
-
-    return (xQueueReceive(xRxQueue, byte, pdMS_TO_TICKS(timeout_ms)) == pdTRUE);
-}
-
 /* libc printf 重定向 */
 int write(int fd, const char *buf, unsigned int size)
 {
