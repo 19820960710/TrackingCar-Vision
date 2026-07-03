@@ -17,6 +17,9 @@ keil/.vscode/keil-assistant.log
 keil/.vscode/uv4.log
 keil/.vscode/uv4.log.lock
 
+# VSCode IntelliSense 自动生成
+keil/.vscode/c_cpp_properties.json
+
 # Python 虚拟环境
 .venv/
 __pycache__/
