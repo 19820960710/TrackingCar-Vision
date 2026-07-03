@@ -130,7 +130,7 @@ bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 #define TIMER_0_INST                                                    (TIMG12)
 #define TIMER_0_INST_IRQHandler                                TIMG12_IRQHandler
 #define TIMER_0_INST_INT_IRQN                                  (TIMG12_INT_IRQn)
-#define TIMER_0_INST_LOAD_VALUE                                         (79999U)
+#define TIMER_0_INST_LOAD_VALUE                                        (799999U)
 
 
 

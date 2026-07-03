@@ -146,7 +146,7 @@ SYSCTL.forceDefaultClkConfig = true;
 SYSCTL.clockTreeEn           = true;
 
 TIMER1.$name              = "TIMER_0";
-TIMER1.timerPeriod        = "1 ms";
+TIMER1.timerPeriod        = "10 ms";
 TIMER1.timerMode          = "PERIODIC";
 TIMER1.interrupts         = ["ZERO"];
 TIMER1.peripheral.$assign = "TIMG12";

@@ -22,6 +22,17 @@ typedef struct {
     float yaw10;
 } attitude_msg_t;
 
+#define ENCODER_SPEED_PERIOD_MS 10
+
+typedef struct {
+    int32_t left_count;
+    int32_t right_count;
+    int32_t left_delta;
+    int32_t right_delta;
+    int32_t left_rpm;
+    int32_t right_rpm;
+} encoder_speed_msg_t;
+
 /* 电机状态枚举 */
 typedef enum {
     MOTOR_STOP = 0,
@@ -37,6 +48,7 @@ static QueueHandle_t g_encoder_queue = NULL;
 
 static QueueHandle_t g_attitude_queue = NULL;
 static TaskHandle_t g_mpu_task_handle = NULL;
+static TaskHandle_t g_encoder_speed_task_handle = NULL;
 
 static int angle_to_tenth(float angle)
 {
@@ -83,18 +95,54 @@ static void mpu_task(void *pvParameters)
     }
 }
 
+static int32_t encoder_delta_to_rpm(int32_t delta)
+{
+    return (int32_t)(((int64_t)delta * 60000) /
+                     ((int64_t)ENCODER_COUNTS_PER_REV * ENCODER_SPEED_PERIOD_MS));
+}
+
+static void encoder_speed_task(void *pvParameters)
+{
+    (void)pvParameters;
+    encoder_speed_msg_t msg = {0};
+
+    encoder_reset();
+    xQueueOverwrite(g_encoder_queue, &msg);
+
+    NVIC_SetPriority(TIMER_0_INST_INT_IRQN, 3);
+    NVIC_ClearPendingIRQ(TIMER_0_INST_INT_IRQN);
+    NVIC_EnableIRQ(TIMER_0_INST_INT_IRQN);
+    DL_TimerG_startCounter(TIMER_0_INST);
+
+    for (;;) {
+        encoder_data_t encoder;
+
+        /* TIMG12 每 10ms 中断一次，ISR 只通知任务，实际读取和计算放在任务中。 */
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        encoder_get_data(&encoder);
+        msg.left_count = encoder.left_count;
+        msg.right_count = encoder.right_count;
+        msg.left_delta = encoder.left_delta;
+        msg.right_delta = encoder.right_delta;
+        msg.left_rpm = encoder_delta_to_rpm(encoder.left_delta);
+        msg.right_rpm = encoder_delta_to_rpm(encoder.right_delta);
+        xQueueOverwrite(g_encoder_queue, &msg);
+    }
+}
+
 static void oled_task(void *pvParameters)
 {
     (void)pvParameters;
     motor_state_t motor_state = MOTOR_STOP;
-    encoder_data_t encoder = {0};
+    encoder_speed_msg_t encoder = {0};
 
     OLED_Init();
     OLED_Clear();
 
     for (;;) {
         motor_state_t new_state;
-        encoder_data_t new_encoder;
+        encoder_speed_msg_t new_encoder;
 
         if (xQueueReceive(g_motor_state_queue, &new_state, 0) == pdPASS) {
             motor_state = new_state;
@@ -113,9 +161,9 @@ static void oled_task(void *pvParameters)
         default:             OLED_ShowString(0, 0, "UNKNOWN",   16, 1); break;
         }
 
-        OLED_vsprint(0, 16, 16, "L:%ld",  (long)encoder.left_count);
-        OLED_vsprint(0, 32, 16, "R:%ld",  (long)encoder.right_count);
-        OLED_vsprint(0, 48, 16, "d:%ld/%ld", (long)encoder.left_delta, (long)encoder.right_delta);
+        OLED_vsprint(0, 16, 16, "L:%ld rpm", (long)encoder.left_rpm);
+        OLED_vsprint(0, 32, 16, "R:%ld rpm", (long)encoder.right_rpm);
+        OLED_vsprint(0, 48, 16, "C:%ld/%ld", (long)encoder.left_count, (long)encoder.right_count);
         OLED_Refresh();
 
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -129,12 +177,10 @@ static void tb6612_test_task(void *pvParameters)
     motor_state_t state = MOTOR_STOP;
     motor_state_t last = MOTOR_STOP;
     bool key_was = false;
-    TickType_t last_encoder_read = xTaskGetTickCount();
 
     tb6612_stop();
     vTaskDelay(pdMS_TO_TICKS(500));
     xQueueOverwrite(g_motor_state_queue, &state);
-    encoder_reset();
 
     for (;;) {
         bool key_now = key_read_user();
@@ -143,13 +189,6 @@ static void tb6612_test_task(void *pvParameters)
             state = (motor_state_t)(((int)state + 1) % MOTOR_STATE_COUNT);
         }
         key_was = key_now;
-
-        if ((xTaskGetTickCount() - last_encoder_read) >= pdMS_TO_TICKS(100)) {
-            encoder_data_t encoder;
-            last_encoder_read = xTaskGetTickCount();
-            encoder_get_data(&encoder);
-            xQueueOverwrite(g_encoder_queue, &encoder);
-        }
 
         if (state != last) {
             last = state;
@@ -209,7 +248,7 @@ int main(void)
 
     g_attitude_queue = xQueueCreate(1, sizeof(attitude_msg_t));
     g_motor_state_queue = xQueueCreate(1, sizeof(motor_state_t));
-    g_encoder_queue = xQueueCreate(1, sizeof(encoder_data_t));
+    g_encoder_queue = xQueueCreate(1, sizeof(encoder_speed_msg_t));
     if (g_attitude_queue == NULL || g_motor_state_queue == NULL || g_encoder_queue == NULL) {
         while (1) {}
     }
@@ -218,6 +257,7 @@ int main(void)
     // xTaskCreate(uart0_Send_task,   "UART_Send",  256, NULL, 1, NULL);
     // xTaskCreate(uart0_Recive_task, "UART_Recv",  256, NULL, 1, NULL);
     xTaskCreate(mpu_task,          "MPU",       512, NULL, 2, &g_mpu_task_handle);
+    xTaskCreate(encoder_speed_task,"ENC_SPD",   256, NULL, 2, &g_encoder_speed_task_handle);
     xTaskCreate(oled_task,         "OLED",       512, NULL, 1, NULL);
     xTaskCreate(tb6612_test_task,  "TB6612_TEST",256, NULL, 2, NULL);
 
@@ -226,7 +266,7 @@ int main(void)
     while (1) {}
 }
 
-/* FreeRTOS 钩子 */
+/*中断服务函数*/
 void GROUP1_IRQHandler(void)
 {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
@@ -245,6 +285,26 @@ void GROUP1_IRQHandler(void)
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
+void TIMER_0_INST_IRQHandler(void)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    switch (DL_TimerG_getPendingInterrupt(TIMER_0_INST)) {
+    case DL_TIMER_IIDX_ZERO:
+        if (g_encoder_speed_task_handle != NULL) {
+            vTaskNotifyGiveFromISR(g_encoder_speed_task_handle, &xHigherPriorityTaskWoken);
+        }
+        break;
+    default:
+        break;
+    }
+
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+
+
+/* FreeRTOS 钩子 */
 void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 {
     (void)xTask; (void)pcTaskName;
