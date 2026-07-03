@@ -641,6 +641,21 @@
             </File>
           </Files>
         </Group>
+        <Group>
+          <GroupName>Component/task</GroupName>
+          <Files>
+            <File>
+              <FileName>app_tasks.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/task/app_tasks.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_tasks.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/task/app_tasks.h</FilePath>
+            </File>
+          </Files>
+        </Group>
       </Groups>
     </Target>
   </Targets>
