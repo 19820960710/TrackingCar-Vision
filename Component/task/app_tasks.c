@@ -50,7 +50,8 @@
 #include "pid/pid.h"
 #include <stdint.h>
 #include <stdbool.h>
-
+#include <stdio.h>
+#include "UART/uart0.h"          /* 调试串口 (printf 重定向 + 收发双任务) */
 /* ═══════════════════════════════════════════════════════════════════════════
  *  数据结构定义
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -102,8 +103,8 @@ typedef struct {
  * @brief PID 输出限幅 ±50（PWM 占空比百分比）
  * @note  防止电机电流过大或 PID 积分饱和 (windup)
  */
-#define PID_OUTPUT_MIN              (-50)
-#define PID_OUTPUT_MAX              (50)
+#define PID_OUTPUT_MIN              (-80)
+#define PID_OUTPUT_MAX              (80)
 
 /**
  * @brief 速度闭环状态快照（通过 status_queue 传递给 OLED 显示）
@@ -423,6 +424,10 @@ static void speed_loop_task(void *pvParameters)
          * 这是整个控制循环的节拍器, 保证精确的 10ms 周期 */
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
+        // char buf[32];
+        // snprintf(buf, sizeof(buf), "%d,%d\r\n", status.left_rpm, status.right_rpm);
+        // uart0_sendStr(buf);
+
         /* ── 第 1 步: 检查是否有新的目标速度 (来自按键/巡线) ──
          * xQueueReceive(0) = 非阻塞读取, 有新值才取出 */
         if (xQueueReceive(g_target_speed_queue, &new_target, 0) == pdPASS) {
@@ -549,6 +554,7 @@ static void oled_task(void *pvParameters)
 {
     (void)pvParameters;
     speed_status_msg_t status = {0};  /* 本地缓存的显示状态 */
+    uint16_t oled_clear_count = 0;  /* OLED 刷屏计数器 (调试用) */
 
     /* ── 初始化 OLED (SSD1306 软件 I2C, PA28=SDA, PA31=SCL) ── */
     OLED_Init();
@@ -563,7 +569,12 @@ static void oled_task(void *pvParameters)
         }
 
         /* ── 刷新 OLED 显示 (16 号字体, 黑底白字) ── */
-        OLED_Clear();  /* 先清显存 */
+        oled_clear_count++;
+        if (oled_clear_count >= 100) {
+            /* 每 100 次刷新 (约 10s) 清屏一次, 避免残影 */
+            OLED_Clear();
+            oled_clear_count = 0;
+        } 
 
         /* 第 0 行: 档位信息 */
         if (status.gear_index < 0) {
@@ -640,8 +651,8 @@ void app_tasks_start(void)
     /* MPU 姿态: 需 I2C 通信栈 + DMP 浮点运算栈, 分配 512 */
     xTaskCreate(mpu_task,        "MPU",      512, NULL, 2, &g_mpu_task_handle);
 
-    /* 速度闭环: 最高优先级, 含 PID 计算 + 队列操作 */
-    xTaskCreate(speed_loop_task, "SPD_LOOP", 384, NULL, 3, &g_speed_loop_task_handle);
+    /* 速度闭环: 最高优先级, 含 PID 计算 + printf 调试栈, 分配 640 */
+    xTaskCreate(speed_loop_task, "SPD_LOOP", 640, NULL, 3, &g_speed_loop_task_handle);
 
     /* 档位切换: 简单按键检测, 栈最小 */
     xTaskCreate(speed_gear_task, "GEAR",     192, NULL, 2, NULL);
