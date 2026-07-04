@@ -102,20 +102,30 @@ void uart0_sendStr(const char *str)
  * @param  buf   数据缓冲区
  * @param  size  字节数
  * @return 实际写入的字节数
- * @note   printf() 系列函数最终调用 write(1, ...) 输出
- *         重定向后所有 printf 输出自动发往 UART0 调试串口
+ * @note   printf() 底层调用 newlib 的 _write() (有下划线!), 不是 write()
+ *         _write() 和 write() 都需实现, 否则 printf 走 semihosting → BKPT → 卡死
  */
-int write(int fd, const char *buf, unsigned int size)
-{
-    (void)fd;  /* 不使用文件描述符 */
 
+/**
+ * @brief  newlib _write syscall: printf/puts/fprintf → UART0
+ * @note   这是 printf 实际调用的底层函数 (注意下划线)
+ *         不实现此函数时, 链接器使用 newlib 默认 semihosting → CPU halt
+ */
+int _write(int fd, const char *buf, unsigned int size)
+{
+    (void)fd;
     uart0_txLock();
     for (unsigned int i = 0; i < size; i++) {
         DL_UART_transmitDataBlocking(UART_0_INST, (uint32_t)buf[i]);
     }
     uart0_txUnlock();
-
     return (int)size;
+}
+
+/** @brief POSIX write(): 直接调用接口 (向后兼容, 内部转发到 _write) */
+int write(int fd, const char *buf, unsigned int size)
+{
+    return _write(fd, buf, size);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

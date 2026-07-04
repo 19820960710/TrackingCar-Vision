@@ -424,10 +424,6 @@ static void speed_loop_task(void *pvParameters)
          * 这是整个控制循环的节拍器, 保证精确的 10ms 周期 */
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-        // char buf[32];
-        // snprintf(buf, sizeof(buf), "%d,%d\r\n", status.left_rpm, status.right_rpm);
-        // uart0_sendStr(buf);
-
         /* ── 第 1 步: 检查是否有新的目标速度 (来自按键/巡线) ──
          * xQueueReceive(0) = 非阻塞读取, 有新值才取出 */
         if (xQueueReceive(g_target_speed_queue, &new_target, 0) == pdPASS) {
@@ -604,6 +600,24 @@ static void oled_task(void *pvParameters)
     }
 }
 
+
+
+/*debug任务，用于调试时打印信息到串口，实际使用中可以注释掉*/
+static void debug_print_task(void *pvParameters)
+{
+    speed_status_msg_t status;
+
+    for (;;) {
+        if (xQueuePeek(g_status_queue, &status, 0) == pdPASS) {
+            // printf("%d,%d\r\n", status.left_rpm, status.right_rpm);
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%d,%d\r\n", status.left_rpm, status.right_rpm);
+            uart0_sendStr(buf);
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
  *  调度器启动函数
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -651,14 +665,17 @@ void app_tasks_start(void)
     /* MPU 姿态: 需 I2C 通信栈 + DMP 浮点运算栈, 分配 512 */
     xTaskCreate(mpu_task,        "MPU",      512, NULL, 2, &g_mpu_task_handle);
 
-    /* 速度闭环: 最高优先级, 含 PID 计算 + printf 调试栈, 分配 640 */
-    xTaskCreate(speed_loop_task, "SPD_LOOP", 640, NULL, 3, &g_speed_loop_task_handle);
+    /* 速度闭环: 最高优先级, 含 PID 计算 , 分配 512 */
+    xTaskCreate(speed_loop_task, "SPD_LOOP", 512, NULL, 3, &g_speed_loop_task_handle);
 
     /* 档位切换: 简单按键检测, 栈最小 */
     xTaskCreate(speed_gear_task, "GEAR",     192, NULL, 2, NULL);
 
     /* OLED 显示: 含 OLED 显存 (128×8=1024字节) + I2C 通信缓冲 */
     xTaskCreate(oled_task,       "OLED",     512, NULL, 1, NULL);
+
+    /* debug任务: 用于调试时打印信息到串口 */
+    xTaskCreate(debug_print_task, "DEBUG",    256, NULL, 1, NULL);
 
     /* ── 启动 FreeRTOS 调度器 ──
      * 此后 CPU 控制权交给调度器, 本函数不再返回
