@@ -31,7 +31,6 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  *  内部辅助函数
  * ═══════════════════════════════════════════════════════════════════════════ */
-
 /**
  * @brief  32 位有符号整数限幅
  * @param  value      输入值
@@ -123,6 +122,26 @@ void pid_inc_set_gain(pid_inc_t *pid, int32_t kp_milli, int32_t ki_milli,
     pid->kd_milli = kd_milli;
 }
 
+void pid_inc_set_output_limit(pid_inc_t *pid, int32_t out_min, int32_t out_max)
+{
+    if (pid == 0) {
+        return;
+    }
+
+    if (out_min > out_max) {
+        int32_t tmp = out_min;
+        out_min = out_max;
+        out_max = tmp;
+    }
+
+    pid->out_min = out_min;
+    pid->out_max = out_max;
+    pid->output_milli = clamp_i32(pid->output_milli,
+                                  pid->out_min * 1000,
+                                  pid->out_max * 1000);
+    pid->output = milli_to_i32_round(pid->output_milli);
+}
+
 /**
  * @brief  复位 PID 控制器内部状态
  * @param  pid  控制器指针
@@ -169,10 +188,7 @@ int32_t pid_inc_compute(pid_inc_t *pid, int32_t target, int32_t measured)
     /* ── 第 1 步: 计算当前误差 ── */
     int32_t err = target - measured;
 
-    /* ── 第 2 步: 增量式 PID 计算 ──
-     * 使用 int64_t 中间变量避免 32 位乘法溢出
-     * kp_milli 最大约 100000 (Kp=100), err 最大约 1000
-     * 乘积最大 1e8, 远小于 int64_t 范围 (9e18) */
+    /* ── 第 2 步: 增量式 PID 计算 ── */
     int64_t delta_milli = 0;
 
     /* 比例项: Kp * (e[k] - e[k-1]) */
@@ -184,16 +200,23 @@ int32_t pid_inc_compute(pid_inc_t *pid, int32_t target, int32_t measured)
     /* 微分项: Kd * (e[k] - 2*e[k-1] + e[k-2]) */
     delta_milli += (int64_t)pid->kd_milli * (err - 2 * pid->err_1 + pid->err_2);
 
-    /* ── 第 3 步: 累加并限幅输出 ──
-     * output_milli 用千倍整数存储, 保留计算精度
-     * 限幅范围也是千倍值 (out_min*1000 ~ out_max*1000) */
+    /* ── 第 3 步: 累加并限幅 ──
+     * 只对最终输出做 clamp，不把超限增量直接清零。
+     * 这样输出可以正常到达 out_min/out_max，避免接近限幅时响应被提前削弱。
+     */
     int32_t min_milli = pid->out_min * 1000;
     int32_t max_milli = pid->out_max * 1000;
+    int64_t next_milli = (int64_t)pid->output_milli + delta_milli;
 
-    pid->output_milli = clamp_i32(pid->output_milli + (int32_t)delta_milli,
-                                  min_milli, max_milli);
+    if (next_milli > max_milli) {
+        pid->output_milli = max_milli;
+    } else if (next_milli < min_milli) {
+        pid->output_milli = min_milli;
+    } else {
+        pid->output_milli = (int32_t)next_milli;
+    }
 
-    /* 千倍 → 实际值 (四舍五入) */
+    /* 千倍 → 实际值。电机死区/前馈补偿放到电机输出层处理，PID 保持纯净。 */
     pid->output = milli_to_i32_round(pid->output_milli);
 
     /* ── 第 4 步: 保存历史误差 ── */

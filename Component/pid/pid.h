@@ -73,6 +73,14 @@ void pid_inc_set_gain(pid_inc_t *pid, int32_t kp_milli, int32_t ki_milli,
                       int32_t kd_milli);
 
 /**
+ * @brief  在线调整输出限幅并约束当前输出
+ * @param  pid      控制器指针
+ * @param  out_min  新输出下限
+ * @param  out_max  新输出上限
+ */
+void pid_inc_set_output_limit(pid_inc_t *pid, int32_t out_min, int32_t out_max);
+
+/**
  * @brief  复位 PID 控制器 (输出清零, 清除历史误差)
  * @param  pid  控制器指针
  */

@@ -92,7 +92,7 @@ typedef struct {
 
 /**
  * @def PID_DEFAULT_KD_MILLI
- * @brief 微分系数 × 1000，实际 Kd = 0（未引入微分项，避免编码器噪声放大）
+ * @brief 微分系数 × 1000，实际 Kd = 0（速度环先关闭 D 项，避免放大编码器量化噪声）
  */
 #define PID_DEFAULT_KD_MILLI        0
 
@@ -105,13 +105,21 @@ typedef struct {
 #define PID_OUTPUT_MAX              (80)
 
 /**
+ * @def SPEED_RAMP_STEP_RPM
+ * @brief 速度目标斜坡步进，每 50ms 最多变化 30RPM，降低换档/反向冲击
+ */
+#define SPEED_RAMP_STEP_RPM         30
+
+/**
  * @brief 速度闭环状态快照（通过 status_queue 传递给 OLED 显示）
  */
 typedef struct {
     uint32_t seq;              /* 消息序号（调试用） */
     uint32_t t_ms;             /* FreeRTOS 滴答计数（调试用） */
-    int32_t  left_target_rpm;  /* 左轮目标速度 (RPM) */
-    int32_t  right_target_rpm; /* 右轮目标速度 (RPM) */
+    int32_t  left_target_rpm;  /* 左轮最终目标速度 (RPM) */
+    int32_t  right_target_rpm; /* 右轮最终目标速度 (RPM) */
+    int32_t  left_setpoint_rpm;  /* 左轮斜坡后内部目标 (RPM) */
+    int32_t  right_setpoint_rpm; /* 右轮斜坡后内部目标 (RPM) */
     int32_t  left_rpm;         /* 左轮实测速度 (RPM, 已滤波) */
     int32_t  right_rpm;        /* 右轮实测速度 (RPM, 已滤波) */
     int32_t  left_pwm;         /* 左轮 PID 输出占空比 (-50 ~ 50) */
@@ -205,6 +213,26 @@ static int32_t encoder_delta_to_rpm10_by_period(int32_t delta, uint32_t period_m
     /* 600000  = 60s/min × 1000ms/s × 10（放大10倍） */
     return (int32_t)(((int64_t)delta * 600000) /
                      ((int64_t)ENCODER_COUNTS_PER_REV * period_ms));
+}
+
+/**
+ * @brief  按固定步长逼近目标速度，避免阶跃目标造成机械冲击
+ */
+static int32_t speed_ramp_step(int32_t current, int32_t target, int32_t step)
+{
+    if (current < target) {
+        current += step;
+        if (current > target) {
+            current = target;
+        }
+    } else if (current > target) {
+        current -= step;
+        if (current < target) {
+            current = target;
+        }
+    }
+
+    return current;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -380,6 +408,12 @@ static void speed_loop_task(void *pvParameters)
     int32_t left_rpm10_filt  = 0;
     int32_t right_rpm10_filt = 0;
 
+    /* ── 最终目标与斜坡后内部目标，PID 使用 setpoint，避免换档/反向冲击 ── */
+    int32_t left_cmd_target_rpm = 0;
+    int32_t right_cmd_target_rpm = 0;
+    int32_t left_setpoint_rpm = 0;
+    int32_t right_setpoint_rpm = 0;
+
     /* ── 编码器增量累加器 (50ms 窗口内累加 5 次 10ms 采样) ── */
     int32_t  left_delta_sum  = 0;
     int32_t  right_delta_sum = 0;
@@ -425,8 +459,10 @@ static void speed_loop_task(void *pvParameters)
         /* ── 第 1 步: 检查是否有新的目标速度 (来自按键/巡线) ──
          * xQueueReceive(0) = 非阻塞读取, 有新值才取出 */
         if (xQueueReceive(g_target_speed_queue, &new_target, 0) == pdPASS) {
-            status.left_target_rpm  = new_target.left_rpm;
-            status.right_target_rpm = new_target.right_rpm;
+            left_cmd_target_rpm = new_target.left_rpm;
+            right_cmd_target_rpm = new_target.right_rpm;
+            status.left_target_rpm  = left_cmd_target_rpm;
+            status.right_target_rpm = right_cmd_target_rpm;
             status.gear_index = -1;  /* 非档位模式 (如手动/巡线) */
 
             /* 尝试匹配档位: 如果左右目标一致且在档位表中, 记录档位索引 */
@@ -439,14 +475,14 @@ static void speed_loop_task(void *pvParameters)
                 }
             }
 
-            /* 目标变更时重置 PID, 清除历史误差, 避免输出突变 */
-            pid_inc_reset(&left_pid);
-            pid_inc_reset(&right_pid);
-            status.left_pwm  = 0;
-            status.right_pwm = 0;
-
-            /* 目标为 0 时直接停止电机 (滑行停止, 非刹车) */
-            if (new_target.left_rpm == 0 && new_target.right_rpm == 0) {
+            /* 仅目标为 0 时立即停止并复位；普通换档/反向交给斜坡过渡，避免输出突变 */
+            if (left_cmd_target_rpm == 0 && right_cmd_target_rpm == 0) {
+                left_setpoint_rpm = 0;
+                right_setpoint_rpm = 0;
+                pid_inc_reset(&left_pid);
+                pid_inc_reset(&right_pid);
+                status.left_pwm  = 0;
+                status.right_pwm = 0;
                 tb6612_stop();
             }
         }
@@ -487,40 +523,50 @@ static void speed_loop_task(void *pvParameters)
             right_delta_sum = 0;
             speed_sample_count = 0;
             speed_updated = true;  /* 标记需执行 PID 计算 */
+
+            /* 速度斜坡：PID 使用内部 setpoint，而不是直接吃最终目标阶跃 */
+            left_setpoint_rpm = speed_ramp_step(left_setpoint_rpm,
+                                                left_cmd_target_rpm,
+                                                SPEED_RAMP_STEP_RPM);
+            right_setpoint_rpm = speed_ramp_step(right_setpoint_rpm,
+                                                 right_cmd_target_rpm,
+                                                 SPEED_RAMP_STEP_RPM);
         }
 
         /* ── 第 4 步: 更新状态快照 ── */
         status.seq++;                                        /* 消息序号递增 */
         status.t_ms       = (uint32_t)xTaskGetTickCount();   /* 系统滴答 (调试) */
+        status.left_setpoint_rpm = left_setpoint_rpm;
+        status.right_setpoint_rpm = right_setpoint_rpm;
         status.left_rpm   = left_rpm10_filt / 10;            /* rpm10 → RPM */
         status.right_rpm  = right_rpm10_filt / 10;
 
         /* ── 第 5 步: PID 计算并输出电机 PWM ── */
-        if (status.left_target_rpm == 0 && status.right_target_rpm == 0) {
-            /* 目标为零: 停止电机 (滑行) */
-            tb6612_stop();
-            status.left_pwm  = 0;
-            status.right_pwm = 0;
-        } else if (speed_updated) {
-            /* 目标非零且速度已更新: 执行增量式 PID 计算
-             * pid_inc_compute() 内部:
-             *   1) 计算误差 e = target - measured
-             *   2) 增量公式: Δu = Kp*(e-e1) + Ki*e + Kd*(e-2e1+e2)
-             *   3) 累加并限幅: u = clamp(u + Δu, ±50)
-             *   4) 保存历史误差: e2 = e1, e1 = e */
+        if (speed_updated) {
+            /* 速度已更新: 使用斜坡后 setpoint 执行增量式 PID 计算 */
             status.left_pwm  = pid_inc_compute(&left_pid,
-                status.left_target_rpm, status.left_rpm);
+                status.left_setpoint_rpm, status.left_rpm);
             status.right_pwm = pid_inc_compute(&right_pid,
-                status.right_target_rpm, status.right_rpm);
+                status.right_setpoint_rpm, status.right_rpm);
 
-            /* ── 电机输出 (实测通道映射反转) ──
-             * TB6612 物理接线:
-             *   电机 A (AO1/AO2) → 物理右轮
-             *   电机 B (BO1/BO2) → 物理左轮
-             * 因此 tb6612_set_speed(参数1=物理右轮, 参数2=物理左轮)
-             * 这里传入 right_pwm 到第 1 参数, left_pwm 到第 2 参数 */
-            tb6612_set_speed((int16_t)status.right_pwm,
-                             (int16_t)status.left_pwm);
+            if (status.left_target_rpm == 0 && status.right_target_rpm == 0 &&
+                status.left_setpoint_rpm == 0 && status.right_setpoint_rpm == 0) {
+                /* 目标为零且斜坡已归零: 滑行停止 */
+                tb6612_stop();
+                status.left_pwm  = 0;
+                status.right_pwm = 0;
+                pid_inc_reset(&left_pid);
+                pid_inc_reset(&right_pid);
+            } else {
+                /* ── 电机输出 (实测通道映射反转) ──
+                 * TB6612 物理接线:
+                 *   电机 A (AO1/AO2) → 物理右轮
+                 *   电机 B (BO1/BO2) → 物理左轮
+                 * 因此 tb6612_set_speed(参数1=物理右轮, 参数2=物理左轮)
+                 * 这里传入 right_pwm 到第 1 参数, left_pwm 到第 2 参数 */
+                tb6612_set_speed((int16_t)status.right_pwm,
+                                 (int16_t)status.left_pwm);
+            }
         }
         /* 注意: 如果 speed_updated == false (不足 5 次采样),
          * 则跳过 PID 计算, 维持当前 PWM 输出不变 */
