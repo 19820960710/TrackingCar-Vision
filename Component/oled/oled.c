@@ -1,9 +1,39 @@
 /**
  * @file    oled.c
  * @brief   SSD1306 OLED 128×64 软件 I2C 显示屏驱动 (MSPM0G3507 移植版)
- * @note    显存结构：OLED_GRAM[128][8]（横向 128 列 × 纵向 8 页，每页 8 行）
- *          所有绘图函数操作显存，调用 OLED_Refresh() 将显存刷新到屏幕
- *          软件 I2C：PA28=SDA，PA31=SCL；硬件 I2C0 留给 MPU6050
+ * @note
+ *   ── 显存结构 ──
+ *   OLED_GRAM[128][8]（横向 128 列 × 纵向 8 页，每页 8 行）
+ *   所有绘图函数操作显存，调用 OLED_Refresh() 将显存刷新到屏幕
+ *
+ *   ── 软件 I2C ──
+ *   引脚: PA28=SDA, PA31=SCL
+ *   原因: 硬件 I2C0 留给 MPU6050, OLED 使用 GPIO bit-bang 模拟 I2C
+ *   时钟频率: ~125kHz (delay_cycles(120) @ 80MHz)
+ *
+ *   ── SSD1306 数据格式 ──
+ *   I2C 一次传输: [控制字节] [数据字节...]
+ *     控制字节 = 0x00 → 后续是命令 (CMD)
+ *     控制字节 = 0x40 → 后续是显示数据 (DATA)
+ *
+ *   ── 刷新性能 ──
+ *   全屏刷新: 8 页 × (1 控制字节 + 128 数据字节) = 1032 字节
+ *   @ 125kHz I2C → 约 66ms (含 Start/Stop 开销约 30ms, 合计约 96ms)
+ *   建议刷新周期: ≥ 100ms (本工程: 100ms, OLED 任务)
+ *
+ *   ── 功能清单 ──
+ *   - 基本绘图: 点、线、圆
+ *   - 字符显示: ASCII (8/12/16/24/32 号字体)
+ *   - 中文显示: 需启用 OLED_ENABLE_CHINESE (16/24/32/64 号字体)
+ *   - 图片显示: BMP 格式位图
+ *   - 格式化输出: OLED_vsprint (类似 printf)
+ *   - 滚屏显示: 中文字符滚屏
+ *
+ *   ── Bus Pirate 调试技巧 ──
+ *   如果 OLED 初始化后不显示:
+ *   1) 检查 I2C 地址: 扫描 0x3C/0x3D (SA0 引脚决定)
+ *   2) 检查 SDA/SCL 是否被拉低: 用万用表测 GPIO 电平
+ *   3) 上电后 SDA 低电平 → 死锁 → 调用 oled_i2c_sda_unlock() 恢复
  */
 
 #include "oled.h"
@@ -64,6 +94,13 @@ static void oled_i2c_gpio_init(void)
     DL_GPIO_disableOutput(OLED_SW_I2C_PORT, OLED_SW_SDA_PIN | OLED_SW_SCL_PIN);
 }
 
+/**
+ * @brief  OLED I2C 总线死锁恢复
+ * @note   当 SSD1306 异常复位时 SDA 可能被拉低 → 总线死锁
+ *         通过 GPIO bit-bang 产生 SCL 脉冲 (最多 100 个),
+ *         每次 SCL 高电平时检查 SDA, 若释放则恢复成功
+ *         原理: 从机在 SCL 上升沿输出 1 bit, 连续输出直到释放 SDA
+ */
 void oled_i2c_sda_unlock(void)
 {
     uint8_t cycleCnt = 0U;
@@ -80,56 +117,93 @@ void oled_i2c_sda_unlock(void)
     } while (++cycleCnt < 100U);
 }
 
+/**
+ * @brief  I2C START 条件: SDA 高→低 时 SCL 保持高
+ * @note   总线空闲时 SDA/SCL 均为高 (外部上拉)
+ *         START: SCL=高, SDA=高→低
+ */
 static void oled_i2c_start(void)
 {
-    oled_sda_release();
-    oled_scl_release();
+    oled_sda_release();  /* SDA=高 (释放) */
+    oled_scl_release();  /* SCL=高 (释放) */
     oled_i2c_delay();
-    oled_sda_low();
+    oled_sda_low();      /* SDA=低 → START 条件 */
     oled_i2c_delay();
-    oled_scl_low();
+    oled_scl_low();      /* SCL=低 → 准备发送数据 */
     oled_i2c_delay();
 }
 
+/**
+ * @brief  I2C STOP 条件: SDA 低→高 时 SCL 保持高
+ * @note   STOP: SCL=高, SDA=低→高
+ *         之后总线空闲 (SDA/SCL 均为高, 外部上拉)
+ */
 static void oled_i2c_stop(void)
 {
-    oled_sda_low();
+    oled_sda_low();      /* SDA=低 (准备) */
     oled_i2c_delay();
-    oled_scl_release();
+    oled_scl_release();  /* SCL=高 */
     oled_i2c_delay();
-    oled_sda_release();
-    oled_i2c_delay();
+    oled_sda_release();  /* SDA=高 → STOP 条件 */
+    oled_i2c_delay();    /* 总线空闲 */
 }
 
+/**
+ * @brief  软件 I2C 写一个字节 (MSB first) + 接收 ACK
+ * @param  data  待发送的 8 位数据
+ * @note   I2C 时序 (每 bit):
+ *         1) SCL=低, 设置 SDA (data bit 7→0)
+ *         2) SCL=高, 从机采样 SDA
+ *         3) SCL=低, 准备下一位
+ *
+ *         第 9 个时钟: 释放 SDA → 从机拉低 SDA (ACK) 或 释放 (NACK)
+ *         本实现不检查 ACK, 避免 OLED 异常时阻塞显示任务
+ */
 static void oled_i2c_write_byte(uint8_t data)
 {
     for (uint8_t i = 0; i < 8U; i++) {
+        /* MSB first: 先发最高位 */
         if (data & 0x80U) {
-            oled_sda_release();
+            oled_sda_release();  /* 数据位=1 → 释放 SDA (外部上拉→高) */
         } else {
-            oled_sda_low();
+            oled_sda_low();      /* 数据位=0 → 拉低 SDA */
         }
         oled_i2c_delay();
+
+        /* SCL 上升沿: 从机锁存数据 */
         oled_scl_release();
         oled_i2c_delay();
+
+        /* SCL 下降沿: 准备下一个 bit */
         oled_scl_low();
-        data <<= 1;
+        data <<= 1;  /* 左移, 下次发送 bit 6 */
         oled_i2c_delay();
     }
 
-    /* 第 9 个时钟释放 SDA 让从机 ACK；这里不强制检查 ACK，避免显示任务被阻塞。 */
+    /* ── 第 9 个时钟: ACK 时隙 ──
+     * 主机释放 SDA → 从机拉低表示 ACK, 保持高表示 NACK
+     * 不强制检查 ACK: 若从机不应答, 跳过本次而不阻塞任务 */
     oled_sda_release();
     oled_i2c_delay();
-    oled_scl_release();
+    oled_scl_release();  /* SCL 上升沿: 从机输出 ACK */
     oled_i2c_delay();
-    oled_scl_low();
+    oled_scl_low();      /* SCL 下降沿: 结束 ACK 时隙 */
     oled_i2c_delay();
 }
 
+/**
+ * @brief  软件 I2C 完整传输: START | addr(W) | data[] | STOP
+ * @param  buf  数据缓冲区 (不含从机地址)
+ * @param  len  数据长度
+ * @note   地址左移 1 位 (7bit addr → 8bit addr+R/W=0)
+ *         例: OLED_ADDR=0x3C → 发送 0x78
+ */
 static void oled_i2c_transmit(const uint8_t *buf, uint16_t len)
 {
     oled_i2c_start();
+    /* 发送从机地址 + 写位 (R/W=0) */
     oled_i2c_write_byte((uint8_t)(OLED_ADDR << 1));
+    /* 发送数据字节 */
     for (uint16_t i = 0; i < len; i++) {
         oled_i2c_write_byte(buf[i]);
     }
