@@ -22,3 +22,6 @@ keil/.vscode/uv4.log.lock
 .venv/
 __pycache__/
 *.pyc
+
+# Pi 本地配置/技能缓存
+.pi/
