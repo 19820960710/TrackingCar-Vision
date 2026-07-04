@@ -50,8 +50,6 @@
 #include "pid/pid.h"
 #include <stdint.h>
 #include <stdbool.h>
-#include <stdio.h>
-#include "UART/uart0.h"          /* 调试串口 (printf 重定向 + 收发双任务) */
 /* ═══════════════════════════════════════════════════════════════════════════
  *  数据结构定义
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -600,24 +598,6 @@ static void oled_task(void *pvParameters)
     }
 }
 
-
-
-/*debug任务，用于调试时打印信息到串口，实际使用中可以注释掉*/
-static void debug_print_task(void *pvParameters)
-{
-    speed_status_msg_t status;
-
-    for (;;) {
-        if (xQueuePeek(g_status_queue, &status, 0) == pdPASS) {
-            // printf("%d,%d\r\n", status.left_rpm, status.right_rpm);
-            char buf[32];
-            snprintf(buf, sizeof(buf), "%d,%d\r\n", status.left_rpm, status.right_rpm);
-            uart0_sendStr(buf);
-        }
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-}
-
 /* ═══════════════════════════════════════════════════════════════════════════
  *  调度器启动函数
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -673,9 +653,6 @@ void app_tasks_start(void)
 
     /* OLED 显示: 含 OLED 显存 (128×8=1024字节) + I2C 通信缓冲 */
     xTaskCreate(oled_task,       "OLED",     512, NULL, 1, NULL);
-
-    /* debug任务: 用于调试时打印信息到串口 */
-    xTaskCreate(debug_print_task, "DEBUG",    256, NULL, 1, NULL);
 
     /* ── 启动 FreeRTOS 调度器 ──
      * 此后 CPU 控制权交给调度器, 本函数不再返回
