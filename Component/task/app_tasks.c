@@ -52,6 +52,11 @@
 #include <stdbool.h>
 #include "UART/uart0.h"          /* 调试串口 (printf 重定向 + 收发双任务) */
 #include "stdio.h"
+
+
+
+
+
 /* ═══════════════════════════════════════════════════════════════════════════
  *  数据结构定义
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -67,50 +72,6 @@ typedef struct {
     float roll10;     /* 横滚角 × 10 (°) */
     float yaw10;      /* 偏航角 × 10 (°) */
 } attitude_msg_t;
-
-/* ═══════════════════════════════════════════════════════════════════════════
- *  速度闭环控制相关常量
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-/**
- * @def ENCODER_SPEED_PERIOD_MS
- * @brief 编码器读取周期 = 10ms
- * @note  TIMG0 定时器每 10ms 产生中断，触发 speed_loop_task 读取编码器增量
- */
-#define ENCODER_SPEED_PERIOD_MS     10
-
-/**
- * @def PID_DEFAULT_KP_MILLI
- * @brief 比例系数 × 1000，实际 Kp = 0.080
- * @note  采用千倍整数表示法，避免 MCU 浮点运算开销
- */
-#define PID_DEFAULT_KP_MILLI        80
-
-/**
- * @def PID_DEFAULT_KI_MILLI
- * @brief 积分系数 × 1000，实际 Ki = 0.050
- */
-#define PID_DEFAULT_KI_MILLI        50
-
-/**
- * @def PID_DEFAULT_KD_MILLI
- * @brief 微分系数 × 1000，实际 Kd = 0（速度环先关闭 D 项，避免放大编码器量化噪声）
- */
-#define PID_DEFAULT_KD_MILLI        0
-
-/**
- * @def PID_OUTPUT_MIN / PID_OUTPUT_MAX
- * @brief PID 输出限幅 ±50（PWM 占空比百分比）
- * @note  防止电机电流过大或 PID 积分饱和 (windup)
- */
-#define PID_OUTPUT_MIN              (-80)
-#define PID_OUTPUT_MAX              (80)
-
-/**
- * @def SPEED_RAMP_STEP_RPM
- * @brief 速度目标斜坡步进，每 50ms 最多变化 30RPM，降低换档/反向冲击
- */
-#define SPEED_RAMP_STEP_RPM         30
 
 /**
  * @brief 速度闭环状态快照（通过 status_queue 传递给 OLED 显示）
@@ -395,6 +356,52 @@ static void speed_gear_task(void *pvParameters)
  *    电机 A (AO1/AO2) 连接物理右轮 → tb6612_set_speed(right_pwm, left_pwm)
  *    即: 第 1 个参数=物理右轮, 第 2 个参数=物理左轮
  * ═══════════════════════════════════════════════════════════════════════════ */
+
+ /* ═══════════════════════════════════════════════════════════════════════════
+ *  速度闭环控制相关常量
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * @def ENCODER_SPEED_PERIOD_MS
+ * @brief 编码器读取周期 = 10ms
+ * @note  TIMG0 定时器每 10ms 产生中断，触发 speed_loop_task 读取编码器增量
+ */
+#define ENCODER_SPEED_PERIOD_MS     10
+
+/**
+ * @def PID_DEFAULT_KP_MILLI
+ * @brief 比例系数 × 1000，实际 Kp = 0.080
+ * @note  采用千倍整数表示法，避免 MCU 浮点运算开销
+ */
+#define PID_DEFAULT_KP_MILLI        80
+
+/**
+ * @def PID_DEFAULT_KI_MILLI
+ * @brief 积分系数 × 1000，实际 Ki = 0.050
+ */
+#define PID_DEFAULT_KI_MILLI        50
+
+/**
+ * @def PID_DEFAULT_KD_MILLI
+ * @brief 微分系数 × 1000，实际 Kd = 0（速度环先关闭 D 项，避免放大编码器量化噪声）
+ */
+#define PID_DEFAULT_KD_MILLI        0
+
+/**
+ * @def PID_OUTPUT_MIN / PID_OUTPUT_MAX
+ * @brief PID 输出限幅 ±50（PWM 占空比百分比）
+ * @note  防止电机电流过大或 PID 积分饱和 (windup)
+ */
+#define PID_OUTPUT_MIN              (-80)
+#define PID_OUTPUT_MAX              (80)
+
+/**
+ * @def SPEED_RAMP_STEP_RPM
+ * @brief 速度目标斜坡步进，每 50ms 最多变化 30RPM，降低换档/反向冲击
+ */
+#define SPEED_RAMP_STEP_RPM         30
+
+
 static void speed_loop_task(void *pvParameters)
 {
     (void)pvParameters;
