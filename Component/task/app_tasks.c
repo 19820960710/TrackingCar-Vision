@@ -50,6 +50,8 @@
 #include "pid/pid.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include "UART/uart0.h"          /* 调试串口 (printf 重定向 + 收发双任务) */
+#include "stdio.h"
 /* ═══════════════════════════════════════════════════════════════════════════
  *  数据结构定义
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -645,6 +647,31 @@ static void oled_task(void *pvParameters)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ *  任务 6: 调试打印任务 (优先级 1, 栈 256)
+ *  ───────────────────────────────────────────
+ *  功能: 从 status_queue 读取速度闭环状态, 每 50ms 输出 RPM 到串口
+ *  用途: 串口波形查看 (SerialPlot / VOFA+ 等工具)
+ *  格式: "左轮RPM,右轮RPM\r\n"
+ * ═══════════════════════════════════════════════════════════════════════════ */
+static void debug_print(void *pvParameters)
+{
+    (void)pvParameters;
+    char buf[128];
+
+    for (;;) {
+        speed_status_msg_t new_status;
+
+        if (xQueuePeek(g_status_queue, &new_status, 0) == pdPASS) {
+            snprintf(buf, sizeof(buf), "%ld,%ld\r\n",
+                     (long)new_status.left_rpm, (long)new_status.right_rpm);
+            uart0_sendStr(buf);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
  *  调度器启动函数
  * ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -699,6 +726,9 @@ void app_tasks_start(void)
 
     /* OLED 显示: 含 OLED 显存 (128×8=1024字节) + I2C 通信缓冲 */
     xTaskCreate(oled_task,       "OLED",     512, NULL, 1, NULL);
+
+    /* DEBUG: 串口波形输出, snprintf + uart0_sendStr, 避开 printf semihosting */
+    xTaskCreate(debug_print,     "DEBUG",    256, NULL, 1, NULL);
 
     /* ── 启动 FreeRTOS 调度器 ──
      * 此后 CPU 控制权交给调度器, 本函数不再返回
