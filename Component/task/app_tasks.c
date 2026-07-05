@@ -52,11 +52,6 @@
 #include <stdbool.h>
 #include "UART/uart0.h"          /* 调试串口 (printf 重定向 + 收发双任务) */
 #include "stdio.h"
-
-
-
-
-
 /* ═══════════════════════════════════════════════════════════════════════════
  *  数据结构定义
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -87,7 +82,6 @@ typedef struct {
     int32_t  right_rpm;        /* 右轮实测速度 (RPM, 已滤波) */
     int32_t  left_pwm;         /* 左轮 PID 输出占空比 (-50 ~ 50) */
     int32_t  right_pwm;        /* 右轮 PID 输出占空比 (-50 ~ 50) */
-    int8_t   gear_index;       /* 当前档位索引 (-1=停转/自由模式, 0~7=8个档位) */
 } speed_status_msg_t;
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -101,19 +95,7 @@ typedef struct {
  *        档位索引: 0~3 前进档, 4~7 后退档
  *        按键每按一次循环切换到下一档
  */
-static const int32_t g_speed_gears[] = {
-    20,    /* 档位 1: 极慢速前进 */
-    100,   /* 档位 2: 慢速前进   */
-    300,   /* 档位 3: 中速前进   */
-    400,   /* 档位 4: 快速前进   */
-    -20,   /* 档位 5: 极慢速后退 */
-    -100,  /* 档位 6: 慢速后退   */
-    -300,  /* 档位 7: 中速后退   */
-    -400,  /* 档位 8: 快速后退   */
-};
 
-/** @brief 档位数量（自动计算，当前为 8） */
-#define SPEED_GEAR_COUNT ((int)(sizeof(g_speed_gears) / sizeof(g_speed_gears[0])))
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  全局 FreeRTOS 句柄
@@ -286,15 +268,13 @@ static void mpu_task(void *pvParameters)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- *  任务 3: 速度档位切换任务 (优先级 2, 栈 192)
+ *  任务 3: 设定小车偏航角切换任务 (优先级 2, 栈 192)
  *  ───────────────────────────────────────────
  *  功能: 检测用户按键 (PB21)，循环切换 8 个速度档位
  *  触发: 周期轮询 10ms，软件消抖集成在 key_read_user() 中
  *
- *  档位循环: 0→1→2→3→4→5→6→7 按下一次切换一档，8→0 回绕
- *  首次按下从停止状态进入档位 0 (20 RPM 前进)
  * ═══════════════════════════════════════════════════════════════════════════ */
-static void speed_gear_task(void *pvParameters)
+static void YawSet_Task(void *pvParameters)
 {
     (void)pvParameters;
     bool key_was = false;     /* 上一次按键状态 */
@@ -308,16 +288,6 @@ static void speed_gear_task(void *pvParameters)
         if (key_now && !key_was) {
             int32_t target;
 
-            /* 档位递增 (首次按从 -1 → 0) */
-            gear_index++;
-            if (gear_index >= SPEED_GEAR_COUNT) {
-                gear_index = 0;  /* 超出范围回绕到第一档 */
-            }
-
-            target = g_speed_gears[gear_index];
-
-            /* 通过队列更新速度闭环任务的目标速度 (左右轮同步) */
-            (void)app_tasks_set_wheel_speed_target(target, target);
         }
 
         key_was = key_now;  /* 保存当前状态用于下次边沿检测 */
@@ -401,7 +371,6 @@ static void speed_gear_task(void *pvParameters)
  */
 #define SPEED_RAMP_STEP_RPM         30
 
-
 static void speed_loop_task(void *pvParameters)
 {
     (void)pvParameters;
@@ -436,8 +405,6 @@ static void speed_loop_task(void *pvParameters)
     pid_inc_init(&right_pid, PID_DEFAULT_KP_MILLI, PID_DEFAULT_KI_MILLI,
                  PID_DEFAULT_KD_MILLI, PID_OUTPUT_MIN, PID_OUTPUT_MAX);
 
-    /* ── 初始化状态 ── */
-    status.gear_index = -1;  /* 停止状态 */
 
     /* ── 清零编码器累积计数 ── */
     encoder_reset();
@@ -472,17 +439,6 @@ static void speed_loop_task(void *pvParameters)
             right_cmd_target_rpm = new_target.right_rpm;
             status.left_target_rpm  = left_cmd_target_rpm;
             status.right_target_rpm = right_cmd_target_rpm;
-            status.gear_index = -1;  /* 非档位模式 (如手动/巡线) */
-
-            /* 尝试匹配档位: 如果左右目标一致且在档位表中, 记录档位索引 */
-            if (new_target.left_rpm == new_target.right_rpm) {
-                for (int i = 0; i < SPEED_GEAR_COUNT; i++) {
-                    if (g_speed_gears[i] == new_target.left_rpm) {
-                        status.gear_index = (int8_t)i;
-                        break;
-                    }
-                }
-            }
 
             /* 仅目标为 0 时立即停止并复位；普通换档/反向交给斜坡过渡，避免输出突变 */
             if (left_cmd_target_rpm == 0 && right_cmd_target_rpm == 0) {
@@ -625,26 +581,6 @@ static void oled_task(void *pvParameters)
             oled_clear_count = 0;
         } 
 
-        /* 第 0 行: 档位信息 */
-        if (status.gear_index < 0) {
-            /* 非档位模式 (停止/自由模式/外部设定) */
-            OLED_ShowString(0, 0, "GEAR: STOP", 16, 1);
-        } else {
-            /* 显示档位号 (1-based, 用户友好) */
-            OLED_vsprint(0, 0, 16, "GEAR:%d", (int)status.gear_index + 1);
-        }
-
-        /* 第 1 行: 目标速度 */
-        OLED_vsprint(0, 16, 16, "T:%ld/%ld",
-                     (long)status.left_target_rpm, (long)status.right_target_rpm);
-
-        /* 第 2 行: 左轮实测速度 + PID 输出 */
-        OLED_vsprint(0, 32, 16, "L:%ld/%ld",
-                     (long)status.left_rpm, (long)status.left_pwm);
-
-        /* 第 3 行: 右轮实测速度 + PID 输出 */
-        OLED_vsprint(0, 48, 16, "R:%ld/%ld",
-                     (long)status.right_rpm, (long)status.right_pwm);
 
         OLED_Refresh();  /* 显存 → 屏幕 */
 
@@ -729,7 +665,7 @@ void app_tasks_start(void)
     xTaskCreate(speed_loop_task, "SPD_LOOP", 512, NULL, 3, &g_speed_loop_task_handle);
 
     /* 档位切换: 简单按键检测, 栈最小 */
-    xTaskCreate(speed_gear_task, "GEAR",     192, NULL, 2, NULL);
+    xTaskCreate(YawSet_Task, "GEAR",     192, NULL, 2, NULL);
 
     /* OLED 显示: 含 OLED 显存 (128×8=1024字节) + I2C 通信缓冲 */
     xTaskCreate(oled_task,       "OLED",     512, NULL, 1, NULL);
