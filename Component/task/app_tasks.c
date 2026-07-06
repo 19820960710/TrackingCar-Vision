@@ -63,9 +63,9 @@
  */
 typedef struct {
     int   status;     /* 0=数据有效, 非0=MPU6050 初始化失败 */
-    float pitch10;    /* 俯仰角 × 10 (°) */
-    float roll10;     /* 横滚角 × 10 (°) */
-    float yaw10;      /* 偏航角 × 10 (°) */
+    float pitch;    /* 俯仰角 × 10 (°) */
+    float roll;     /* 横滚角 × 10 (°) */
+    float yaw;      /* 偏航角 × 10 (°) */
 } attitude_msg_t;
 
 /**
@@ -180,6 +180,21 @@ static int32_t speed_ramp_step(int32_t current, int32_t target, int32_t step)
     return current;
 }
 
+/**
+ * @brief  将角度归一化到 (-180, 180]，用于 yaw 零点相减后的跨界处理
+ */
+static float normalize_angle_deg(float angle)
+{
+    while (angle > 180.0f) {
+        angle -= 360.0f;
+    }
+    while (angle <= -180.0f) {
+        angle += 360.0f;
+    }
+    return angle;
+}
+
+
 /* ═══════════════════════════════════════════════════════════════════════════
  *  任务 1: LED 闪烁任务 (优先级 1, 栈 128)
  *  ───────────────────────────────────────────
@@ -212,10 +227,28 @@ static void led_task(void *pvParameters)
  *
  *  DMP 输出速率: 50Hz (DEFAULT_MPU_HZ = 50)
  * ═══════════════════════════════════════════════════════════════════════════ */
+
+#define MPU_STABLE_REQUIRED_SAMPLES    100U   /* 50Hz 下 500 帧约 10s */
+#define MPU_STABLE_PITCH_RANGE_DEG     0.50f  /* 整个稳定窗口内 pitch 最大-最小值不超过该值 */
+#define MPU_STABLE_ROLL_RANGE_DEG      0.50f  /* 整个稳定窗口内 roll 最大-最小值不超过该值 */
+#define MPU_STABLE_YAW_RANGE_DEG       1.0f  /* 整个稳定窗口内 yaw 最大-最小值不超过该值 */
+
 static void mpu_task(void *pvParameters)
 {
     (void)pvParameters;
     attitude_msg_t msg = {0};
+
+    /* 上电后先判断 pitch/roll/yaw 三个数据均稳定，再开始写入队列 */
+    uint16_t attitude_stable_count = 0;   /* 当前稳定检测窗口内的采样数 */
+    float pitch_min = 0.0f;
+    float pitch_max = 0.0f;
+    float roll_min = 0.0f;
+    float roll_max = 0.0f;
+    float yaw_min = 0.0f;
+    float yaw_max = 0.0f;
+    float yaw_window_ref = 0.0f;          /* yaw 窗口参考角，用于处理 ±180° 跨界 */
+    float yaw_zero_offset = 0.0f;         /* 复位后 yaw 零点偏移 */
+    bool attitude_ready = false;          /* true 后才向队列发布姿态数据 */
 
     /* ── 等待 200ms: 确保 MPU6050 上电稳定 ── */
     vTaskDelay(pdMS_TO_TICKS(200));
@@ -256,10 +289,55 @@ static void mpu_task(void *pvParameters)
          * 转换为欧拉角存储到全局变量 pitch/roll/yaw (单位: °)
          * 返回 0 = 成功, -1 = FIFO 读取错误, -2 = MPU6050 未就绪 */
         if (Read_Quad() == 0) {
-            msg.status  = 0;
-            msg.pitch10 = pitch;   /* 俯仰角 (°) */
-            msg.roll10  = roll;    /* 横滚角 (°) */
-            msg.yaw10   = yaw;     /* 偏航角 (°) */
+            /* 启动阶段：必须整段窗口内 pitch/roll/yaw 都不继续漂移，才开始写入队列 */
+            if (!attitude_ready) {
+                if (attitude_stable_count == 0U) {
+                    pitch_min = pitch;
+                    pitch_max = pitch;
+                    roll_min = roll;
+                    roll_max = roll;
+                    yaw_window_ref = yaw;
+                    yaw_min = yaw;
+                    yaw_max = yaw;
+                    attitude_stable_count = 1U;
+                    continue;
+                }
+
+                float yaw_unwrapped = yaw_window_ref +
+                    normalize_angle_deg(yaw - yaw_window_ref);
+
+                if (pitch < pitch_min) pitch_min = pitch;
+                if (pitch > pitch_max) pitch_max = pitch;
+                if (roll < roll_min) roll_min = roll;
+                if (roll > roll_max) roll_max = roll;
+                if (yaw_unwrapped < yaw_min) yaw_min = yaw_unwrapped;
+                if (yaw_unwrapped > yaw_max) yaw_max = yaw_unwrapped;
+
+                attitude_stable_count++;
+                if (attitude_stable_count < MPU_STABLE_REQUIRED_SAMPLES) {
+                    continue;
+                }
+
+                if (((pitch_max - pitch_min) <= MPU_STABLE_PITCH_RANGE_DEG) &&
+                    ((roll_max - roll_min) <= MPU_STABLE_ROLL_RANGE_DEG) &&
+                    ((yaw_max - yaw_min) <= MPU_STABLE_YAW_RANGE_DEG)) {
+                    /* 三个数据稳定后，把当前朝向作为复位 yaw 零点 */
+                    yaw_zero_offset = yaw;
+                    attitude_ready = true;
+                } else {
+                    /* 这 10s 内仍在慢慢漂移，重新开启下一轮窗口检测 */
+                    attitude_stable_count = 0U;
+                    continue;
+                }
+            }
+
+            msg.status = 0;
+            /* pitch/roll 直接使用 DMP 输出，即显示相对重力方向的绝对倾角 */
+            msg.pitch = pitch;
+            msg.roll  = roll;
+            /* yaw 没有磁力计绝对参考，因此只把“复位后的初始朝向”定义为 0° */
+            msg.yaw = normalize_angle_deg(yaw - yaw_zero_offset);
+
             /* 写入队列（预留给后续平衡/巡线任务消费） */
             xQueueOverwrite(g_attitude_queue, &msg);
         }
@@ -286,8 +364,7 @@ static void YawSet_Task(void *pvParameters)
 
         /* 上升沿检测: 按键从未按下 → 按下 的跳变 */
         if (key_now && !key_was) {
-            int32_t target;
-
+            app_tasks_set_wheel_speed_target(50,30);
         }
 
         key_was = key_now;  /* 保存当前状态用于下次边沿检测 */
@@ -499,8 +576,6 @@ static void speed_loop_task(void *pvParameters)
         }
 
         /* ── 第 4 步: 更新状态快照 ── */
-        status.seq++;                                        /* 消息序号递增 */
-        status.t_ms       = (uint32_t)xTaskGetTickCount();   /* 系统滴答 (调试) */
         status.left_setpoint_rpm = left_setpoint_rpm;
         status.right_setpoint_rpm = right_setpoint_rpm;
         status.left_rpm   = left_rpm10_filt / 10;            /* rpm10 → RPM */
@@ -546,32 +621,23 @@ static void speed_loop_task(void *pvParameters)
  *  ───────────────────────────────────────────
  *  功能: 从 status_queue 读取速度闭环状态并刷新到 OLED 屏幕
  *  刷新率: ≈ 10Hz (每 100ms 刷新一次)
- *
- *  显示布局 (128×64 OLED):
- *  ┌────────────────────────────────────┐
- *  │ GEAR: 3  (档位 1~8 或 STOP)       │ 第 0 行 y=0
- *  │ T: 300/300    (目标速度 L/R RPM)    │ 第 1 行 y=16
- *  │ L: 298/45     (左轮实测/PWM)        │ 第 2 行 y=32
- *  │ R: 295/48     (右轮实测/PWM)        │ 第 3 行 y=48
- *  └────────────────────────────────────┘
  * ═══════════════════════════════════════════════════════════════════════════ */
 static void oled_task(void *pvParameters)
 {
     (void)pvParameters;
-    speed_status_msg_t status = {0};  /* 本地缓存的显示状态 */
-    uint16_t oled_clear_count = 0;  /* OLED 刷屏计数器 (调试用) */
+    attitude_msg_t status = {0};  /* 本地缓存的显示状态 */
+    uint16_t oled_clear_count = 99;  /* OLED 刷屏计数器 (调试用) */
 
     /* ── 初始化 OLED (SSD1306 软件 I2C, PA28=SDA, PA31=SCL) ── */
     OLED_Init();
     OLED_Clear();  /* 清屏 */
 
+    OLED_vsprint(0,0,16,"mpu init...");
+    OLED_Refresh();  /* 显存 → 屏幕 */
     for (;;) {
-        speed_status_msg_t new_status;
 
-        /* 非阻塞读取: 有新数据就更新本地缓存 */
-        if (xQueueReceive(g_status_queue, &new_status, 0) == pdPASS) {
-            status = new_status;
-        }
+        /* 阻塞读取: 有新数据就更新本地缓存 */
+        xQueueReceive(g_attitude_queue, &status, portMAX_DELAY);
 
         /* ── 刷新 OLED 显示 (16 号字体, 黑底白字) ── */
         oled_clear_count++;
@@ -579,13 +645,21 @@ static void oled_task(void *pvParameters)
             /* 每 100 次刷新 (约 10s) 清屏一次, 避免残影 */
             OLED_Clear();
             oled_clear_count = 0;
-        } 
-
+        }
+        
+        if (status.status)
+            OLED_vsprint(0,0,16,"mpu failure");
+        else{
+            OLED_vsprint(0,0,16,"mpu data   ");
+            OLED_vsprint(0,16,16,"pitch:%7.2f",status.pitch);
+            OLED_vsprint(0,32,16,"roll :%7.2f",status.roll);
+            OLED_vsprint(0,48,16," yaw :%7.2f",status.yaw);
+        }
 
         OLED_Refresh();  /* 显存 → 屏幕 */
 
         /* 100ms 刷新周期 (OLED I2C 传输耗约 30ms, 剩余时间让出 CPU) */
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
 }
 
