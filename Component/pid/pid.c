@@ -235,3 +235,115 @@ int32_t pid_inc_get_output(const pid_inc_t *pid)
 {
     return (pid == 0) ? 0 : pid->output;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  位置式 PID：用于 yaw/循线等上层位置量闭环
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+void pid_pos_init(pid_pos_t *pid, int32_t kp_milli, int32_t ki_milli,
+                  int32_t kd_milli, int32_t out_min, int32_t out_max)
+{
+    if (pid == 0) {
+        return;
+    }
+
+    pid->kp_milli = kp_milli;
+    pid->ki_milli = ki_milli;
+    pid->kd_milli = kd_milli;
+    pid->out_min = out_min;
+    pid->out_max = out_max;
+    pid_pos_reset(pid);
+}
+
+void pid_pos_set_gain(pid_pos_t *pid, int32_t kp_milli, int32_t ki_milli,
+                      int32_t kd_milli)
+{
+    if (pid == 0) {
+        return;
+    }
+
+    pid->kp_milli = kp_milli;
+    pid->ki_milli = ki_milli;
+    pid->kd_milli = kd_milli;
+}
+
+void pid_pos_set_output_limit(pid_pos_t *pid, int32_t out_min, int32_t out_max)
+{
+    if (pid == 0) {
+        return;
+    }
+
+    if (out_min > out_max) {
+        int32_t tmp = out_min;
+        out_min = out_max;
+        out_max = tmp;
+    }
+
+    pid->out_min = out_min;
+    pid->out_max = out_max;
+    pid->integral_milli = clamp_i32(pid->integral_milli,
+                                    pid->out_min * 1000,
+                                    pid->out_max * 1000);
+    pid->output = clamp_i32(pid->output, pid->out_min, pid->out_max);
+}
+
+void pid_pos_reset(pid_pos_t *pid)
+{
+    if (pid == 0) {
+        return;
+    }
+
+    pid->output = 0;
+    pid->integral_milli = 0;
+    pid->last_err = 0;
+    pid->first_run = 1U;
+}
+
+int32_t pid_pos_compute_error(pid_pos_t *pid, int32_t err)
+{
+    if (pid == 0) {
+        return 0;
+    }
+
+    int32_t derr = 0;
+    if (pid->first_run) {
+        pid->first_run = 0U;
+    } else {
+        derr = err - pid->last_err;
+    }
+
+    int64_t next_integral = (int64_t)pid->integral_milli +
+                            (int64_t)pid->ki_milli * err;
+    int32_t min_milli = pid->out_min * 1000;
+    int32_t max_milli = pid->out_max * 1000;
+
+    if (next_integral > max_milli) {
+        pid->integral_milli = max_milli;
+    } else if (next_integral < min_milli) {
+        pid->integral_milli = min_milli;
+    } else {
+        pid->integral_milli = (int32_t)next_integral;
+    }
+
+    int64_t output_milli = 0;
+    output_milli += (int64_t)pid->kp_milli * err;
+    output_milli += pid->integral_milli;
+    output_milli += (int64_t)pid->kd_milli * derr;
+
+    if (output_milli > max_milli) {
+        output_milli = max_milli;
+    } else if (output_milli < min_milli) {
+        output_milli = min_milli;
+    }
+
+    int32_t output = milli_to_i32_round((int32_t)output_milli);
+    pid->output = clamp_i32(output, pid->out_min, pid->out_max);
+    pid->last_err = err;
+
+    return pid->output;
+}
+
+int32_t pid_pos_get_output(const pid_pos_t *pid)
+{
+    return (pid == 0) ? 0 : pid->output;
+}

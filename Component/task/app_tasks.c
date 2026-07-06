@@ -50,6 +50,8 @@
 #include "pid/pid.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
 #include "UART/uart0.h"          /* 调试串口 (printf 重定向 + 收发双任务) */
 #include "stdio.h"
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -84,6 +86,37 @@ typedef struct {
     int32_t  right_pwm;        /* 右轮 PID 输出占空比 (-50 ~ 50) */
 } speed_status_msg_t;
 
+/**
+ * @brief yaw 闭环目标消息（通过 yaw_target_queue 传递）
+ */
+typedef struct {
+    int32_t base_speed_rpm;      /* 基准速度 (RPM) */
+    int32_t target_yaw_deg10;    /* 目标 yaw ×10 */
+    bool enabled;                /* true=使能 yaw 闭环 */
+    bool reset_pid;              /* true=目标切换/模式切换后复位 yaw PID */
+} yaw_target_msg_t;
+
+/**
+ * @brief yaw 闭环调试状态（debug_print 任务输出 TEL）
+ */
+typedef struct {
+    uint32_t seq;
+    uint32_t t_ms;
+    int32_t base_speed_rpm;
+    int32_t target_yaw_deg10;
+    int32_t current_yaw_deg10;
+    int32_t error_yaw_deg10;
+    int32_t turn_rpm;
+    int32_t left_cmd_rpm;
+    int32_t right_cmd_rpm;
+    int32_t kp_milli;
+    int32_t ki_milli;
+    int32_t kd_milli;
+    bool enabled;
+    bool estop_latched;
+    bool attitude_valid;
+} yaw_debug_status_t;
+
 /* ═══════════════════════════════════════════════════════════════════════════
  *  速度档位表
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -102,13 +135,100 @@ typedef struct {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 /* ── 队列 (Queue): 任务间数据传递 ── */
-static QueueHandle_t g_attitude_queue     = NULL;  /* MPU → 平衡任务 (预留) */
-static QueueHandle_t g_status_queue       = NULL;  /* 速度闭环 → OLED */
-static QueueHandle_t g_target_speed_queue = NULL;  /* 按键/巡线 → 速度闭环 */
+static QueueHandle_t g_attitude_queue     = NULL;  /* MPU → yaw/OLED */
+static QueueHandle_t g_status_queue       = NULL;  /* 速度闭环 → OLED/调试 */
+static QueueHandle_t g_target_speed_queue = NULL;  /* yaw/巡线 → 速度闭环 */
+static QueueHandle_t g_yaw_target_queue   = NULL;  /* 按键/串口/上位机 → yaw 闭环 */
+
+/* ── yaw 闭环共享状态：按键、串口和调试输出复用同一份目标 ── */
+static int32_t g_yaw_base_speed_rpm = 0;
+static int32_t g_yaw_target_deg10 = 0;
+static bool g_yaw_enabled = false;
+static bool g_yaw_estop_latched = false;
+static bool g_yaw_reset_request = false;
+static int32_t g_yaw_kp_milli = 65;   /* 初始 Kp=0.065 rpm/0.1°，串口实测折中值 */
+static int32_t g_yaw_ki_milli = 0;
+static int32_t g_yaw_kd_milli = 15;
+static int32_t g_yaw_out_limit_rpm = 80;
+static bool g_yaw_pid_config_dirty = false;
+static yaw_debug_status_t g_yaw_debug_status = {0};
 
 /* ── 任务句柄 (Task Handle): ISR 中发送任务通知 ── */
-static TaskHandle_t g_mpu_task_handle       = NULL;  /* MPU6050 姿态任务 */
+static TaskHandle_t g_mpu_task_handle        = NULL;  /* MPU6050 姿态任务 */
+static TaskHandle_t g_yaw_loop_task_handle   = NULL;  /* yaw 角闭环任务 */
 static TaskHandle_t g_speed_loop_task_handle = NULL;  /* 速度闭环控制任务 */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  yaw 闭环目标辅助函数
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * @brief 将 0.1° 角度归一化到 (-1800, 1800]
+ */
+static int32_t normalize_angle_deg10(int32_t angle_deg10)
+{
+    while (angle_deg10 > 1800) {
+        angle_deg10 -= 3600;
+    }
+    while (angle_deg10 <= -1800) {
+        angle_deg10 += 3600;
+    }
+    return angle_deg10;
+}
+
+static int32_t float_deg_to_deg10(float angle_deg)
+{
+    if (angle_deg >= 0.0f) {
+        return (int32_t)(angle_deg * 10.0f + 0.5f);
+    }
+    return (int32_t)(angle_deg * 10.0f - 0.5f);
+}
+
+static int32_t abs_i32(int32_t value)
+{
+    return (value < 0) ? -value : value;
+}
+
+static void yaw_get_target_snapshot(int32_t *base_speed_rpm,
+                                    int32_t *target_yaw_deg10)
+{
+    taskENTER_CRITICAL();
+    if (base_speed_rpm != NULL) {
+        *base_speed_rpm = g_yaw_base_speed_rpm;
+    }
+    if (target_yaw_deg10 != NULL) {
+        *target_yaw_deg10 = g_yaw_target_deg10;
+    }
+    taskEXIT_CRITICAL();
+}
+
+static bool yaw_control_publish_state(int32_t base_speed_rpm,
+                                      int32_t target_yaw_deg10,
+                                      bool enabled,
+                                      bool reset_pid)
+{
+    yaw_target_msg_t target;
+
+    if (g_yaw_target_queue == NULL) {
+        return false;
+    }
+
+    target.base_speed_rpm = base_speed_rpm;
+    target.target_yaw_deg10 = normalize_angle_deg10(target_yaw_deg10);
+    target.enabled = enabled;
+    target.reset_pid = reset_pid;
+
+    taskENTER_CRITICAL();
+    g_yaw_base_speed_rpm = target.base_speed_rpm;
+    g_yaw_target_deg10 = target.target_yaw_deg10;
+    g_yaw_enabled = target.enabled;
+    if (reset_pid) {
+        g_yaw_reset_request = true;
+    }
+    taskEXIT_CRITICAL();
+
+    return (xQueueOverwrite(g_yaw_target_queue, &target) == pdPASS);
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  公开接口实现
@@ -135,6 +255,16 @@ bool app_tasks_set_wheel_speed_target(int32_t left_rpm, int32_t right_rpm)
 
     /* xQueueOverwrite: 队列满时覆盖旧值，保证不阻塞调用者 */
     return (xQueueOverwrite(g_target_speed_queue, &target) == pdPASS);
+}
+
+bool app_tasks_set_yaw_target(int32_t base_speed_rpm, int32_t target_yaw_deg10)
+{
+    if (g_yaw_estop_latched) {
+        return false;
+    }
+
+    return yaw_control_publish_state(base_speed_rpm, target_yaw_deg10,
+                                     true, true);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -355,8 +485,8 @@ static void mpu_task(void *pvParameters)
 static void YawKeySet_Task(void *pvParameters)
 {
     (void)pvParameters;
-    bool key_was = false;     /* 上一次按键状态 */
-    int  gear_index = -1;     /* 当前档位索引, -1 = 停止 (初始状态) */
+    bool key_was = false;        /* 上一次按键状态 */
+    int32_t yaw_deg10 = 0;       /* 当前按键档位 yaw，单位 0.1° */
 
     for (;;) {
         /* 读取当前按键状态 (含软件消抖: 连续两次读到相同电平才确认) */
@@ -364,7 +494,14 @@ static void YawKeySet_Task(void *pvParameters)
 
         /* 上升沿检测: 按键从未按下 → 按下 的跳变 */
         if (key_now && !key_was) {
-            app_tasks_set_wheel_speed_target(50,30);
+            int32_t base_speed_rpm = 0;
+            yaw_deg10 += 450;          /* 每按一次增加 45° */
+            if (yaw_deg10 > 1800) {
+                yaw_deg10 = 0;
+            }
+
+            yaw_get_target_snapshot(&base_speed_rpm, NULL);
+            (void)app_tasks_set_yaw_target(base_speed_rpm, yaw_deg10);
         }
 
         key_was = key_now;  /* 保存当前状态用于下次边沿检测 */
@@ -375,7 +512,141 @@ static void YawKeySet_Task(void *pvParameters)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- *  任务 4: 速度闭环控制任务 (优先级 3 - 最高, 栈 384)
+ *  任务 4: yaw 角闭环任务 (优先级 2, 栈 384)
+ *  ───────────────────────────────────────────
+ *  功能: 读取 MPU6050 yaw，位置式 PID 计算转向差速，再通过统一轮速接口
+ *        app_tasks_set_wheel_speed_target() 下发到已有双轮速度闭环。
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+#define YAW_LOOP_TIMER_TICK_MS     10
+#define YAW_LOOP_PERIOD_MS          50
+#define YAW_LOOP_DIVIDER            (YAW_LOOP_PERIOD_MS / YAW_LOOP_TIMER_TICK_MS)
+#define YAW_PID_DEFAULT_KP_MILLI    65
+#define YAW_PID_DEFAULT_KI_MILLI    0
+#define YAW_PID_DEFAULT_KD_MILLI    15
+#define YAW_PID_OUTPUT_LIMIT_RPM    80
+
+static void yaw_loop_task(void *pvParameters)
+{
+    (void)pvParameters;
+
+    pid_pos_t yaw_pid;
+    yaw_target_msg_t target = {0, 0, false, true};
+    yaw_debug_status_t debug = {0};
+    uint32_t tick_divider = 0;
+
+    pid_pos_init(&yaw_pid, YAW_PID_DEFAULT_KP_MILLI,
+                 YAW_PID_DEFAULT_KI_MILLI,
+                 YAW_PID_DEFAULT_KD_MILLI,
+                 -YAW_PID_OUTPUT_LIMIT_RPM,
+                 YAW_PID_OUTPUT_LIMIT_RPM);
+
+    for (;;) {
+        bool do_yaw_control = false;
+
+        /* 由 TIMER_0 10ms 中断通知。本任务先更新上层 yaw 目标，
+         * 再通知 speed_loop_task 采样编码器/执行速度环，保证控制顺序为：
+         * Timer -> yaw_loop -> app_tasks_set_wheel_speed_target -> speed_loop。
+         */
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        tick_divider++;
+        if (tick_divider >= YAW_LOOP_DIVIDER) {
+            tick_divider = 0;
+            do_yaw_control = true;
+        }
+
+        if (xQueueReceive(g_yaw_target_queue, &target, 0) == pdPASS) {
+            if (target.reset_pid) {
+                pid_pos_reset(&yaw_pid);
+            }
+        }
+
+        if (g_yaw_pid_config_dirty) {
+            int32_t limit;
+            taskENTER_CRITICAL();
+            pid_pos_set_gain(&yaw_pid, g_yaw_kp_milli,
+                             g_yaw_ki_milli, g_yaw_kd_milli);
+            limit = g_yaw_out_limit_rpm;
+            g_yaw_pid_config_dirty = false;
+            taskEXIT_CRITICAL();
+            if (limit < 0) {
+                limit = -limit;
+            }
+            pid_pos_set_output_limit(&yaw_pid, -limit, limit);
+            pid_pos_reset(&yaw_pid);
+        }
+
+        if (g_yaw_reset_request) {
+            taskENTER_CRITICAL();
+            g_yaw_reset_request = false;
+            taskEXIT_CRITICAL();
+            pid_pos_reset(&yaw_pid);
+        }
+
+        if (do_yaw_control) {
+            attitude_msg_t attitude;
+
+            debug.seq++;
+            debug.t_ms = (uint32_t)xTaskGetTickCount();
+            debug.base_speed_rpm = target.base_speed_rpm;
+            debug.target_yaw_deg10 = target.target_yaw_deg10;
+            debug.kp_milli = yaw_pid.kp_milli;
+            debug.ki_milli = yaw_pid.ki_milli;
+            debug.kd_milli = yaw_pid.kd_milli;
+            debug.enabled = g_yaw_enabled;
+            debug.estop_latched = g_yaw_estop_latched;
+            debug.attitude_valid = false;
+
+            if (g_yaw_estop_latched) {
+                pid_pos_reset(&yaw_pid);
+                debug.turn_rpm = 0;
+                debug.left_cmd_rpm = 0;
+                debug.right_cmd_rpm = 0;
+                (void)app_tasks_set_wheel_speed_target(0, 0);
+                tb6612_stop();
+            } else if (!target.enabled) {
+                pid_pos_reset(&yaw_pid);
+                debug.turn_rpm = 0;
+                debug.left_cmd_rpm = 0;
+                debug.right_cmd_rpm = 0;
+            } else if (xQueuePeek(g_attitude_queue, &attitude, 0) != pdPASS ||
+                       attitude.status != 0) {
+                pid_pos_reset(&yaw_pid);
+                debug.turn_rpm = 0;
+                debug.left_cmd_rpm = 0;
+                debug.right_cmd_rpm = 0;
+                (void)app_tasks_set_wheel_speed_target(0, 0);
+            } else {
+                debug.attitude_valid = true;
+                debug.current_yaw_deg10 = normalize_angle_deg10(
+                    float_deg_to_deg10(attitude.yaw));
+                debug.error_yaw_deg10 = normalize_angle_deg10(
+                    target.target_yaw_deg10 - debug.current_yaw_deg10);
+
+                debug.turn_rpm = pid_pos_compute_error(&yaw_pid,
+                                                       debug.error_yaw_deg10);
+
+                /* yaw PID 输出为差速修正量。若实测发现越修越偏，交换这里的正负号。 */
+                debug.left_cmd_rpm = target.base_speed_rpm - debug.turn_rpm;
+                debug.right_cmd_rpm = target.base_speed_rpm + debug.turn_rpm;
+
+                (void)app_tasks_set_wheel_speed_target(debug.left_cmd_rpm,
+                                                       debug.right_cmd_rpm);
+            }
+
+            g_yaw_debug_status = debug;
+        }
+
+        /* yaw_loop_task 完成目标更新后，再唤醒速度闭环任务。 */
+        if (g_speed_loop_task_handle != NULL) {
+            xTaskNotifyGive(g_speed_loop_task_handle);
+        }
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  任务 5: 速度闭环控制任务 (优先级 3 - 最高, 栈 384)
  *  ───────────────────────────────────────────
  *  这是整个系统最核心的控制任务，负责:
  *    1. 编码器数据采集 (10ms 硬件定时器触发)
@@ -636,8 +907,8 @@ static void oled_task(void *pvParameters)
     OLED_Refresh();  /* 显存 → 屏幕 */
     for (;;) {
 
-        /* 阻塞读取: 有新数据就更新本地缓存 */
-        xQueueReceive(g_attitude_queue, &status, portMAX_DELAY);
+        /* 读取最新姿态但不移除队列数据，避免与 yaw_loop_task 抢同一份姿态 */
+        xQueuePeek(g_attitude_queue, &status, portMAX_DELAY);
 
         /* ── 刷新 OLED 显示 (16 号字体, 黑底白字) ── */
         oled_clear_count++;
@@ -647,13 +918,30 @@ static void oled_task(void *pvParameters)
             oled_clear_count = 0;
         }
         
-        if (status.status)
-            OLED_vsprint(0,0,16,"mpu failure");
-        else{
-            OLED_vsprint(0,0,16,"mpu data   ");
-            OLED_vsprint(0,16,16,"pitch:%7.2f",status.pitch);
-            OLED_vsprint(0,32,16,"roll :%7.2f",status.roll);
-            OLED_vsprint(0,48,16," yaw :%7.2f",status.yaw);
+        if (status.status) {
+            OLED_vsprint(0,0,16,"mpu failure    ");
+            OLED_vsprint(0,16,16,"yaw target: ---");
+            OLED_vsprint(0,32,16,"yaw now   : ---");
+            OLED_vsprint(0,48,16,"check MPU6050  ");
+        } else {
+            yaw_debug_status_t yaw_status = g_yaw_debug_status;
+            int32_t tgt_abs = abs_i32(yaw_status.target_yaw_deg10);
+            int32_t now_abs = abs_i32(float_deg_to_deg10(status.yaw));
+            int32_t err_abs = abs_i32(yaw_status.error_yaw_deg10);
+            char tgt_sign = (yaw_status.target_yaw_deg10 < 0) ? '-' : ' ';
+            char now_sign = (float_deg_to_deg10(status.yaw) < 0) ? '-' : ' ';
+            char err_sign = (yaw_status.error_yaw_deg10 < 0) ? '-' : ' ';
+
+            OLED_vsprint(0,0,16,"YT:%c%3ld.%1ld %s", tgt_sign,
+                         (long)(tgt_abs / 10), (long)(tgt_abs % 10),
+                         yaw_status.enabled ? "ON " : "OFF");
+            OLED_vsprint(0,16,16,"YN:%c%3ld.%1ld", now_sign,
+                         (long)(now_abs / 10), (long)(now_abs % 10));
+            OLED_vsprint(0,32,16,"YE:%c%3ld.%1ld", err_sign,
+                         (long)(err_abs / 10), (long)(err_abs % 10));
+            OLED_vsprint(0,48,16,"B:%4ld T:%4ld",
+                         (long)yaw_status.base_speed_rpm,
+                         (long)yaw_status.turn_rpm);
         }
 
         OLED_Refresh();  /* 显存 → 屏幕 */
@@ -664,7 +952,204 @@ static void oled_task(void *pvParameters)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- *  任务 6: 调试打印任务 (优先级 1, 栈 256)
+ *  任务 7: 串口 yaw 调试命令任务 (优先级 1, 栈 384)
+ *  ───────────────────────────────────────────
+ *  命令:
+ *    BASE <rpm>      设置基准速度并使能 yaw 闭环
+ *    SPD <rpm>       BASE 的别名，兼容旧调试习惯
+ *    YAW <deg>       设置期望 yaw 角，单位 °
+ *    YAW10 <deg10>   设置期望 yaw 角，单位 0.1°
+ *    PIDY <kp> <ki> <kd>  设置 yaw PID，参数为 milli 整数
+ *    OUTY <rpm>      设置 yaw PID 输出限幅
+ *    START           清除 ESTOP，并按当前 base/yaw 使能闭环
+ *    STOP            关闭闭环并停车
+ *    ESTOP           锁存急停，立即停车
+ *    CLR             清除急停，保持闭环关闭并复位 PID
+ *    HELP            打印命令帮助
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void uart_send_help(void)
+{
+    uart0_sendStr("CMD BASE <rpm> | SPD <rpm> | YAW <deg> | YAW10 <deg10>\r\n");
+    uart0_sendStr("CMD PIDY <kp_m> <ki_m> <kd_m> | OUTY <rpm>\r\n");
+    uart0_sendStr("CMD START | STOP | ESTOP | CLR | HELP\r\n");
+}
+
+static void uart_handle_command(char *line)
+{
+    char *cmd = strtok(line, " \t");
+    char *arg1;
+    char *arg2;
+    char *arg3;
+    int32_t base_speed_rpm;
+    int32_t target_yaw_deg10;
+
+    if (cmd == NULL) {
+        return;
+    }
+
+    if (strcmp(cmd, "HELP") == 0 || strcmp(cmd, "?") == 0) {
+        uart_send_help();
+        return;
+    }
+
+    yaw_get_target_snapshot(&base_speed_rpm, &target_yaw_deg10);
+
+    if (strcmp(cmd, "BASE") == 0 || strcmp(cmd, "SPD") == 0) {
+        arg1 = strtok(NULL, " \t");
+        if (arg1 != NULL) {
+            base_speed_rpm = (int32_t)strtol(arg1, NULL, 10);
+            if (app_tasks_set_yaw_target(base_speed_rpm, target_yaw_deg10)) {
+                uart0_sendStr("OK BASE\r\n");
+            } else {
+                uart0_sendStr("ERR ESTOP_OR_QUEUE\r\n");
+            }
+        }
+        return;
+    }
+
+    if (strcmp(cmd, "YAW") == 0) {
+        arg1 = strtok(NULL, " \t");
+        if (arg1 != NULL) {
+            target_yaw_deg10 = (int32_t)strtol(arg1, NULL, 10) * 10;
+            if (app_tasks_set_yaw_target(base_speed_rpm, target_yaw_deg10)) {
+                uart0_sendStr("OK YAW\r\n");
+            } else {
+                uart0_sendStr("ERR ESTOP_OR_QUEUE\r\n");
+            }
+        }
+        return;
+    }
+
+    if (strcmp(cmd, "YAW10") == 0) {
+        arg1 = strtok(NULL, " \t");
+        if (arg1 != NULL) {
+            target_yaw_deg10 = (int32_t)strtol(arg1, NULL, 10);
+            if (app_tasks_set_yaw_target(base_speed_rpm, target_yaw_deg10)) {
+                uart0_sendStr("OK YAW10\r\n");
+            } else {
+                uart0_sendStr("ERR ESTOP_OR_QUEUE\r\n");
+            }
+        }
+        return;
+    }
+
+    if (strcmp(cmd, "PIDY") == 0) {
+        arg1 = strtok(NULL, " \t");
+        arg2 = strtok(NULL, " \t");
+        arg3 = strtok(NULL, " \t");
+        if (arg1 != NULL && arg2 != NULL && arg3 != NULL) {
+            taskENTER_CRITICAL();
+            g_yaw_kp_milli = (int32_t)strtol(arg1, NULL, 10);
+            g_yaw_ki_milli = (int32_t)strtol(arg2, NULL, 10);
+            g_yaw_kd_milli = (int32_t)strtol(arg3, NULL, 10);
+            g_yaw_pid_config_dirty = true;
+            g_yaw_reset_request = true;
+            taskEXIT_CRITICAL();
+            uart0_sendStr("OK PIDY\r\n");
+        }
+        return;
+    }
+
+    if (strcmp(cmd, "OUTY") == 0) {
+        arg1 = strtok(NULL, " \t");
+        if (arg1 != NULL) {
+            int32_t limit = (int32_t)strtol(arg1, NULL, 10);
+            if (limit < 0) {
+                limit = -limit;
+            }
+            taskENTER_CRITICAL();
+            g_yaw_out_limit_rpm = limit;
+            g_yaw_pid_config_dirty = true;
+            g_yaw_reset_request = true;
+            taskEXIT_CRITICAL();
+            uart0_sendStr("OK OUTY\r\n");
+        }
+        return;
+    }
+
+    if (strcmp(cmd, "START") == 0) {
+        taskENTER_CRITICAL();
+        g_yaw_estop_latched = false;
+        taskEXIT_CRITICAL();
+        (void)yaw_control_publish_state(base_speed_rpm, target_yaw_deg10,
+                                        true, true);
+        uart0_sendStr("OK START\r\n");
+        return;
+    }
+
+    if (strcmp(cmd, "STOP") == 0) {
+        (void)yaw_control_publish_state(base_speed_rpm, target_yaw_deg10,
+                                        false, true);
+        (void)app_tasks_set_wheel_speed_target(0, 0);
+        tb6612_stop();
+        uart0_sendStr("OK STOP\r\n");
+        return;
+    }
+
+    if (strcmp(cmd, "ESTOP") == 0) {
+        taskENTER_CRITICAL();
+        g_yaw_estop_latched = true;
+        g_yaw_enabled = false;
+        g_yaw_reset_request = true;
+        taskEXIT_CRITICAL();
+        (void)yaw_control_publish_state(0, target_yaw_deg10, false, true);
+        (void)app_tasks_set_wheel_speed_target(0, 0);
+        tb6612_stop();
+        uart0_sendStr("EVT ESTOP\r\n");
+        return;
+    }
+
+    if (strcmp(cmd, "CLR") == 0) {
+        taskENTER_CRITICAL();
+        g_yaw_estop_latched = false;
+        g_yaw_reset_request = true;
+        taskEXIT_CRITICAL();
+        (void)yaw_control_publish_state(base_speed_rpm, target_yaw_deg10,
+                                        false, true);
+        (void)app_tasks_set_wheel_speed_target(0, 0);
+        tb6612_stop();
+        uart0_sendStr("OK CLR\r\n");
+        return;
+    }
+
+    uart0_sendStr("ERR UNKNOWN_CMD\r\n");
+}
+
+static void uart_cmd_task(void *pvParameters)
+{
+    (void)pvParameters;
+    char line[96];
+    uint32_t index = 0;
+
+    uart_send_help();
+
+    for (;;) {
+        uint8_t byte;
+        if (!uart0_read_byte(&byte, 100)) {
+            continue;
+        }
+
+        if (byte == '\r' || byte == '\n') {
+            if (index > 0U) {
+                line[index] = '\0';
+                uart_handle_command(line);
+                index = 0;
+            }
+            continue;
+        }
+
+        if (index < (sizeof(line) - 1U)) {
+            line[index++] = (char)byte;
+        } else {
+            index = 0;
+            uart0_sendStr("ERR LINE_TOO_LONG\r\n");
+        }
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  任务 8: 调试打印任务 (优先级 1, 栈 256)
  *  ───────────────────────────────────────────
  *  功能: 从 status_queue 读取速度闭环状态, 每 50ms 输出 RPM 到串口
  *  用途: 串口波形查看 (SerialPlot / VOFA+ 等工具)
@@ -673,14 +1158,32 @@ static void oled_task(void *pvParameters)
 static void debug_print(void *pvParameters)
 {
     (void)pvParameters;
-    char buf[128];
+    char buf[256];
 
     for (;;) {
-        speed_status_msg_t new_status;
+        speed_status_msg_t speed_status;
+        yaw_debug_status_t yaw_status = g_yaw_debug_status;
 
-        if (xQueuePeek(g_status_queue, &new_status, 0) == pdPASS) {
-            snprintf(buf, sizeof(buf), "%ld,%ld\r\n",
-                     (long)new_status.left_rpm, (long)new_status.right_rpm);
+        if (xQueuePeek(g_status_queue, &speed_status, 0) == pdPASS) {
+            snprintf(buf, sizeof(buf),
+                     "TEL seq=%lu t=%lu estop=%d en=%d att=%d base=%ld tgt=%ld yaw=%ld err=%ld turn=%ld lt=%ld rt=%ld l=%ld r=%ld kp=%ld ki=%ld kd=%ld\r\n",
+                     (unsigned long)yaw_status.seq,
+                     (unsigned long)yaw_status.t_ms,
+                     yaw_status.estop_latched ? 1 : 0,
+                     yaw_status.enabled ? 1 : 0,
+                     yaw_status.attitude_valid ? 1 : 0,
+                     (long)yaw_status.base_speed_rpm,
+                     (long)yaw_status.target_yaw_deg10,
+                     (long)yaw_status.current_yaw_deg10,
+                     (long)yaw_status.error_yaw_deg10,
+                     (long)yaw_status.turn_rpm,
+                     (long)yaw_status.left_cmd_rpm,
+                     (long)yaw_status.right_cmd_rpm,
+                     (long)speed_status.left_rpm,
+                     (long)speed_status.right_rpm,
+                     (long)yaw_status.kp_milli,
+                     (long)yaw_status.ki_milli,
+                     (long)yaw_status.kd_milli);
             uart0_sendStr(buf);
         }
 
@@ -719,12 +1222,16 @@ void app_tasks_start(void)
     g_attitude_queue     = xQueueCreate(1, sizeof(attitude_msg_t));
     g_status_queue       = xQueueCreate(1, sizeof(speed_status_msg_t));
     g_target_speed_queue = xQueueCreate(1, sizeof(app_wheel_speed_target_t));
+    g_yaw_target_queue   = xQueueCreate(1, sizeof(yaw_target_msg_t));
 
     /* 任何队列创建失败 → 不可恢复错误, 死循环 */
     if (g_attitude_queue == NULL || g_status_queue == NULL ||
-        g_target_speed_queue == NULL) {
+        g_target_speed_queue == NULL || g_yaw_target_queue == NULL) {
         while (1) {}
     }
+
+    /* yaw 默认安全关闭：基准速度 0、目标 0°，等待按键/串口 START 后使能 */
+    (void)yaw_control_publish_state(0, 0, false, true);
 
     /* ── 创建任务 ──
      * xTaskCreate(任务函数, 任务名, 栈深度, 参数, 优先级, 任务句柄) */
@@ -735,17 +1242,23 @@ void app_tasks_start(void)
     /* MPU 姿态: 需 I2C 通信栈 + DMP 浮点运算栈, 分配 512 */
     xTaskCreate(mpu_task,        "MPU",      512, NULL, 2, &g_mpu_task_handle);
 
-    /* 速度闭环: 最高优先级, 含 PID 计算 , 分配 512 */
+    /* yaw 角闭环: 由 10ms Timer 通知，先更新轮速目标，再通知速度闭环 */
+    xTaskCreate(yaw_loop_task,   "YAW_LOOP", 384, NULL, 4, &g_yaw_loop_task_handle);
+
+    /* 速度闭环: 由 yaw_loop_task 通知，含 PID 计算，分配 512 */
     xTaskCreate(speed_loop_task, "SPD_LOOP", 512, NULL, 3, &g_speed_loop_task_handle);
 
-    /* 档位切换: 简单按键检测, 栈最小 */
-    xTaskCreate(YawKeySet_Task, "GEAR",     192, NULL, 2, NULL);
+    /* yaw 目标切换: PB21 每按一次目标角 +45° */
+    xTaskCreate(YawKeySet_Task,  "YAW_KEY",  192, NULL, 2, NULL);
 
     /* OLED 显示: 含 OLED 显存 (128×8=1024字节) + I2C 通信缓冲 */
     xTaskCreate(oled_task,       "OLED",     512, NULL, 1, NULL);
 
-    /* DEBUG: 串口波形输出, snprintf + uart0_sendStr, 避开 printf semihosting */
-    xTaskCreate(debug_print,     "DEBUG",    256, NULL, 1, NULL);
+    /* UART_CMD: 串口在线调参命令解析 */
+    xTaskCreate(uart_cmd_task,   "UART_CMD", 384, NULL, 1, NULL);
+
+    /* DEBUG: TEL 遥测输出, snprintf + uart0_sendStr, 避开 printf semihosting */
+    xTaskCreate(debug_print,     "DEBUG",    384, NULL, 1, NULL);
 
     /* ── 启动 FreeRTOS 调度器 ──
      * 此后 CPU 控制权交给调度器, 本函数不再返回
@@ -799,7 +1312,8 @@ void GROUP1_IRQHandler(void)
 
 /**
  * @brief  TIMG0 10ms 定时中断处理
- * @note   每 10ms 产生一次中断, 发送任务通知唤醒 speed_loop_task
+ * @note   每 10ms 产生一次中断, 发送任务通知唤醒 yaw_loop_task；
+ *         yaw_loop_task 更新目标后再通知 speed_loop_task
  *
  *         中断优先级: 3 (与 GROUP1 同级, 但由 NVIC 优先级分组决定抢占关系)
  *         SysConfig 中 TIMER_0_INST 配置为单次/周期模式 (period = 10ms)
@@ -811,9 +1325,9 @@ void TIMER_0_INST_IRQHandler(void)
     /* 检查中断源: 零比较匹配 (CC0 = 0 触发) */
     switch (DL_TimerG_getPendingInterrupt(TIMER_0_INST)) {
     case DL_TIMER_IIDX_ZERO:
-        /* 发送任务通知: 解除 speed_loop_task 的阻塞, 进入下一个控制周期 */
-        if (g_speed_loop_task_handle != NULL) {
-            vTaskNotifyGiveFromISR(g_speed_loop_task_handle,
+        /* 发送任务通知: 先唤醒 yaw_loop_task，yaw 更新目标后再通知 speed_loop_task */
+        if (g_yaw_loop_task_handle != NULL) {
+            vTaskNotifyGiveFromISR(g_yaw_loop_task_handle,
                                    &xHigherPriorityTaskWoken);
         }
         break;
@@ -821,7 +1335,7 @@ void TIMER_0_INST_IRQHandler(void)
         break;
     }
 
-    /* 请求上下文切换 (speed_loop_task 优先级 3 > 当前任务优先级时执行) */
+    /* 请求上下文切换 (yaw_loop_task 优先级 4 > 当前任务优先级时执行) */
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 

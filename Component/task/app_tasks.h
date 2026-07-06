@@ -29,6 +29,17 @@ typedef struct {
 } app_wheel_speed_target_t;
 
 /**
+ * @brief yaw 角闭环目标结构体
+ *
+ * yaw 角单位为 0.1°，例如 45° = 450。
+ * base_speed_rpm 为左右轮共同基准速度，yaw PID 输出会叠加为差速修正。
+ */
+typedef struct {
+    int32_t base_speed_rpm;   /**< 基准速度 (RPM)，正前进/负后退 */
+    int32_t target_yaw_deg10; /**< 期望 yaw 角 ×10，范围建议 (-1800, 1800] */
+} app_yaw_target_t;
+
+/**
  * @brief  设置左右轮目标速度 (外部接口)
  * @param  left_rpm   左轮目标速度 (RPM), 正前进/负后退
  * @param  right_rpm  右轮目标速度 (RPM), 正前进/负后退
@@ -49,6 +60,17 @@ typedef struct {
  * @endcode
  */
 bool app_tasks_set_wheel_speed_target(int32_t left_rpm, int32_t right_rpm);
+
+/**
+ * @brief  设置 yaw 角闭环目标
+ * @param  base_speed_rpm    基准速度 (RPM)，默认可传 0 实现原地转向/定向
+ * @param  target_yaw_deg10  期望 yaw 角 ×10，例如 45° 传 450
+ * @return true=写入成功, false=队列未就绪或当前 ESTOP 锁存
+ *
+ * @note   这是 yaw 上层闭环的统一入口。按键、串口调试、自动调参脚本、
+ *         后续巡线/上位机都应调用/触发该接口，不直接操作左右轮差速。
+ */
+bool app_tasks_set_yaw_target(int32_t base_speed_rpm, int32_t target_yaw_deg10);
 
 /**
  * @brief  创建所有 FreeRTOS 任务并启动调度器
