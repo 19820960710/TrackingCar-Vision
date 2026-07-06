@@ -352,7 +352,7 @@ static void mpu_task(void *pvParameters)
  *  触发: 周期轮询 10ms，软件消抖集成在 key_read_user() 中
  *
  * ═══════════════════════════════════════════════════════════════════════════ */
-static void YawSet_Task(void *pvParameters)
+static void YawKeySet_Task(void *pvParameters)
 {
     (void)pvParameters;
     bool key_was = false;     /* 上一次按键状态 */
@@ -739,7 +739,7 @@ void app_tasks_start(void)
     xTaskCreate(speed_loop_task, "SPD_LOOP", 512, NULL, 3, &g_speed_loop_task_handle);
 
     /* 档位切换: 简单按键检测, 栈最小 */
-    xTaskCreate(YawSet_Task, "GEAR",     192, NULL, 2, NULL);
+    xTaskCreate(YawKeySet_Task, "GEAR",     192, NULL, 2, NULL);
 
     /* OLED 显示: 含 OLED 显存 (128×8=1024字节) + I2C 通信缓冲 */
     xTaskCreate(oled_task,       "OLED",     512, NULL, 1, NULL);
