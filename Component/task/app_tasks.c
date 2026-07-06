@@ -228,10 +228,10 @@ static void led_task(void *pvParameters)
  *  DMP 输出速率: 50Hz (DEFAULT_MPU_HZ = 50)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-#define MPU_STABLE_REQUIRED_SAMPLES    100U   /* 50Hz 下 500 帧约 10s */
-#define MPU_STABLE_PITCH_RANGE_DEG     0.50f  /* 整个稳定窗口内 pitch 最大-最小值不超过该值 */
-#define MPU_STABLE_ROLL_RANGE_DEG      0.50f  /* 整个稳定窗口内 roll 最大-最小值不超过该值 */
-#define MPU_STABLE_YAW_RANGE_DEG       1.0f  /* 整个稳定窗口内 yaw 最大-最小值不超过该值 */
+#define MPU_STABLE_REQUIRED_SAMPLES    80U   /* 50Hz 下 80 帧约 1.6s */
+#define MPU_STABLE_PITCH_RANGE_DEG     1.50f  /* 整个稳定窗口内 pitch 最大-最小值不超过该值 */
+#define MPU_STABLE_ROLL_RANGE_DEG      1.50f  /* 整个稳定窗口内 roll 最大-最小值不超过该值 */
+#define MPU_STABLE_YAW_RANGE_DEG       1.00f  /* 整个稳定窗口内 yaw 最大-最小值不超过该值 */
 
 static void mpu_task(void *pvParameters)
 {
