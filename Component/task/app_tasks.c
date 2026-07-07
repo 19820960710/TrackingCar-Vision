@@ -158,7 +158,7 @@ static int32_t g_yaw_min_turn_rpm = 15;        /* 尾段最小转向速度补偿
 static int32_t g_yaw_deadband_deg10 = 15;      /* 1.5° 内认为到位，兼顾静差与近目标抖动 */
 static int32_t g_yaw_integral_zone_deg10 = 180;/* 18° 内才积分，避免大角度 windup */
 static int32_t g_yaw_integral_limit_rpm = 6;   /* 积分项最大贡献 ±6RPM */
-static int32_t g_yaw_min_turn_zone_deg10 = 50; /* 只在 5° 内启用最小速度补偿，避免大动作刹车段推过头 */
+static int32_t g_yaw_min_turn_zone_deg10 = 180;/* 18° 内启用连续恢复速度曲线，避免中途停顿 */
 static int32_t g_yaw_target_ramp_step_deg10 = 80; /* 目标斜坡步长，单位 0.1°/50ms */
 static bool g_yaw_pid_config_dirty = false;
 static yaw_debug_status_t g_yaw_debug_status = {0};
@@ -556,6 +556,29 @@ static void YawKeySet_Task(void *pvParameters)
 #define YAW_PID_OUTPUT_LIMIT_RPM    160
 #define YAW_DYNAMIC_CAP_BASE_RPM    12
 #define YAW_DYNAMIC_CAP_ERR_DIV     25
+#define YAW_RECOVER_MAX_TURN_RPM    30
+
+static int32_t yaw_recover_turn_for_error(int32_t abs_err_deg10,
+                                          int32_t deadband_deg10,
+                                          int32_t zone_deg10,
+                                          int32_t min_turn_rpm)
+{
+    int32_t span;
+    int32_t pos;
+
+    if (min_turn_rpm <= 0 || abs_err_deg10 <= deadband_deg10) {
+        return 0;
+    }
+    if (zone_deg10 <= deadband_deg10 || abs_err_deg10 >= zone_deg10) {
+        return YAW_RECOVER_MAX_TURN_RPM;
+    }
+
+    span = zone_deg10 - deadband_deg10;
+    pos = abs_err_deg10 - deadband_deg10;
+    return min_turn_rpm +
+        ((YAW_RECOVER_MAX_TURN_RPM - min_turn_rpm) * pos) / span;
+}
+
 static int32_t yaw_target_ramp_step(int32_t current_deg10,
                                     int32_t target_deg10,
                                     int32_t step_deg10)
@@ -671,10 +694,16 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
      * 不绕过速度环，不直接拍 PWM，因此编码器速度环仍然负责闭环约束。
      */
     int32_t err_sign = (err_deg10 > 0) ? 1 : -1;
-    if (allow_static_boost && min_turn > 0 && abs_err > deadband &&
+    int32_t recover_turn = yaw_recover_turn_for_error(abs_err,
+                                                       deadband,
+                                                       g_yaw_min_turn_zone_deg10,
+                                                       min_turn);
+    bool output_same_direction = (output == 0) ||
+        ((output > 0 && err_sign > 0) || (output < 0 && err_sign < 0));
+    if (allow_static_boost && recover_turn > 0 &&
         abs_err <= g_yaw_min_turn_zone_deg10 &&
-        abs_i32(output) < min_turn) {
-        output = (err_sign > 0) ? min_turn : -min_turn;
+        output_same_direction && abs_i32(output) < recover_turn) {
+        output = (err_sign > 0) ? recover_turn : -recover_turn;
         if (boost_active_out != NULL) {
             *boost_active_out = true;
         }
