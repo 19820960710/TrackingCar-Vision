@@ -146,10 +146,14 @@ static int32_t g_yaw_target_deg10 = 0;
 static bool g_yaw_enabled = false;
 static bool g_yaw_estop_latched = false;
 static bool g_yaw_reset_request = false;
-static int32_t g_yaw_kp_milli = 65;   /* 初始 Kp=0.065 rpm/0.1°，串口实测折中值 */
-static int32_t g_yaw_ki_milli = 0;
-static int32_t g_yaw_kd_milli = 15;
-static int32_t g_yaw_out_limit_rpm = 80;
+static int32_t g_yaw_kp_milli = 95;   /* yaw 角环串口抗扰实测最优默认值 */
+static int32_t g_yaw_ki_milli = 2;    /* 小积分，仅在小误差区启用，消除静态误差 */
+static int32_t g_yaw_kd_milli = 45;   /* 阻尼项，抑制提高 Kp/限幅后的超调 */
+static int32_t g_yaw_out_limit_rpm = 160;
+static int32_t g_yaw_min_turn_rpm = 14;        /* 最小转向前馈，克服静摩擦/抗干扰 */
+static int32_t g_yaw_deadband_deg10 = 15;      /* 1.5° 内认为到位，避免来回抖动 */
+static int32_t g_yaw_integral_zone_deg10 = 300;/* 30° 内才积分，避免大角度 windup */
+static int32_t g_yaw_integral_limit_rpm = 20;  /* 积分项最大贡献 ±20RPM */
 static bool g_yaw_pid_config_dirty = false;
 static yaw_debug_status_t g_yaw_debug_status = {0};
 
@@ -187,6 +191,25 @@ static int32_t float_deg_to_deg10(float angle_deg)
 static int32_t abs_i32(int32_t value)
 {
     return (value < 0) ? -value : value;
+}
+
+static int32_t clamp_i32_local(int32_t value, int32_t min_value, int32_t max_value)
+{
+    if (value > max_value) {
+        return max_value;
+    }
+    if (value < min_value) {
+        return min_value;
+    }
+    return value;
+}
+
+static int32_t milli_to_i32_round_local(int32_t value_milli)
+{
+    if (value_milli >= 0) {
+        return (value_milli + 500) / 1000;
+    }
+    return (value_milli - 500) / 1000;
 }
 
 static void yaw_get_target_snapshot(int32_t *base_speed_rpm,
@@ -521,10 +544,81 @@ static void YawKeySet_Task(void *pvParameters)
 #define YAW_LOOP_TIMER_TICK_MS     10
 #define YAW_LOOP_PERIOD_MS          50
 #define YAW_LOOP_DIVIDER            (YAW_LOOP_PERIOD_MS / YAW_LOOP_TIMER_TICK_MS)
-#define YAW_PID_DEFAULT_KP_MILLI    65
-#define YAW_PID_DEFAULT_KI_MILLI    0
-#define YAW_PID_DEFAULT_KD_MILLI    15
-#define YAW_PID_OUTPUT_LIMIT_RPM    80
+#define YAW_PID_DEFAULT_KP_MILLI    95
+#define YAW_PID_DEFAULT_KI_MILLI    2
+#define YAW_PID_DEFAULT_KD_MILLI    45
+#define YAW_PID_OUTPUT_LIMIT_RPM    160
+
+static int32_t yaw_pid_compute_turn(pid_pos_t *pid, int32_t err_deg10)
+{
+    if (pid == NULL) {
+        return 0;
+    }
+
+    int32_t abs_err = abs_i32(err_deg10);
+    int32_t deadband = g_yaw_deadband_deg10;
+    int32_t min_turn = g_yaw_min_turn_rpm;
+    int32_t izone = g_yaw_integral_zone_deg10;
+    int32_t ilimit = g_yaw_integral_limit_rpm;
+
+    if (deadband < 0) deadband = -deadband;
+    if (min_turn < 0) min_turn = -min_turn;
+    if (izone < deadband) izone = deadband;
+    if (ilimit < 0) ilimit = -ilimit;
+
+    if (abs_err <= deadband) {
+        pid_pos_reset(pid);
+        return 0;
+    }
+
+    int32_t derr = 0;
+    if (pid->first_run) {
+        pid->first_run = 0U;
+    } else {
+        derr = err_deg10 - pid->last_err;
+    }
+
+    if (abs_err <= izone && pid->ki_milli != 0) {
+        int64_t next_integral = (int64_t)pid->integral_milli +
+                                (int64_t)pid->ki_milli * err_deg10;
+        int32_t int_limit_milli = ilimit * 1000;
+        if (next_integral > int_limit_milli) {
+            pid->integral_milli = int_limit_milli;
+        } else if (next_integral < -int_limit_milli) {
+            pid->integral_milli = -int_limit_milli;
+        } else {
+            pid->integral_milli = (int32_t)next_integral;
+        }
+    } else {
+        /* 大角度时快速泄放积分，防止切换大目标后 windup 残留。 */
+        pid->integral_milli /= 2;
+    }
+
+    int64_t output_milli = 0;
+    output_milli += (int64_t)pid->kp_milli * err_deg10;
+    output_milli += pid->integral_milli;
+    output_milli += (int64_t)pid->kd_milli * derr;
+
+    int32_t out_min_milli = pid->out_min * 1000;
+    int32_t out_max_milli = pid->out_max * 1000;
+    if (output_milli > out_max_milli) {
+        output_milli = out_max_milli;
+    } else if (output_milli < out_min_milli) {
+        output_milli = out_min_milli;
+    }
+
+    int32_t output = milli_to_i32_round_local((int32_t)output_milli);
+
+    /* 小误差区如果 PID 输出过小，强制给最小转向前馈，解决静摩擦导致的静差。 */
+    if (min_turn > 0 && abs_err > deadband && abs_i32(output) < min_turn) {
+        output = (err_deg10 > 0) ? min_turn : -min_turn;
+    }
+
+    output = clamp_i32_local(output, pid->out_min, pid->out_max);
+    pid->output = output;
+    pid->last_err = err_deg10;
+    return output;
+}
 
 static void yaw_loop_task(void *pvParameters)
 {
@@ -624,7 +718,7 @@ static void yaw_loop_task(void *pvParameters)
                 debug.error_yaw_deg10 = normalize_angle_deg10(
                     target.target_yaw_deg10 - debug.current_yaw_deg10);
 
-                debug.turn_rpm = pid_pos_compute_error(&yaw_pid,
+                debug.turn_rpm = yaw_pid_compute_turn(&yaw_pid,
                                                        debug.error_yaw_deg10);
 
                 /* yaw PID 输出为差速修正量。若实测发现越修越偏，交换这里的正负号。 */
@@ -717,7 +811,7 @@ static void yaw_loop_task(void *pvParameters)
  * @def SPEED_RAMP_STEP_RPM
  * @brief 速度目标斜坡步进，每 50ms 最多变化 30RPM，降低换档/反向冲击
  */
-#define SPEED_RAMP_STEP_RPM         30
+#define SPEED_RAMP_STEP_RPM         80
 
 static void speed_loop_task(void *pvParameters)
 {
@@ -897,6 +991,7 @@ static void oled_task(void *pvParameters)
 {
     (void)pvParameters;
     attitude_msg_t status = {0};  /* 本地缓存的显示状态 */
+    bool attitude_seen = false;      /* MPU 稳定前队列可能约 20s 无数据 */
     uint16_t oled_clear_count = 99;  /* OLED 刷屏计数器 (调试用) */
 
     /* ── 初始化 OLED (SSD1306 软件 I2C, PA28=SDA, PA31=SCL) ── */
@@ -907,8 +1002,10 @@ static void oled_task(void *pvParameters)
     OLED_Refresh();  /* 显存 → 屏幕 */
     for (;;) {
 
-        /* 读取最新姿态但不移除队列数据，避免与 yaw_loop_task 抢同一份姿态 */
-        xQueuePeek(g_attitude_queue, &status, portMAX_DELAY);
+        /* MPU 复位后约 20s 才发布稳定姿态；这里不能永久阻塞，否则 OLED 无等待提示。 */
+        if (xQueuePeek(g_attitude_queue, &status, pdMS_TO_TICKS(20)) == pdPASS) {
+            attitude_seen = true;
+        }
 
         /* ── 刷新 OLED 显示 (16 号字体, 黑底白字) ── */
         oled_clear_count++;
@@ -918,7 +1015,17 @@ static void oled_task(void *pvParameters)
             oled_clear_count = 0;
         }
         
-        if (status.status) {
+        if (!attitude_seen) {
+            yaw_debug_status_t yaw_status = g_yaw_debug_status;
+            int32_t tgt_abs = abs_i32(yaw_status.target_yaw_deg10);
+            char tgt_sign = (yaw_status.target_yaw_deg10 < 0) ? '-' : ' ';
+            OLED_vsprint(0,0,16,"MPU stabilizing");
+            OLED_vsprint(0,16,16,"wait about 20s ");
+            OLED_vsprint(0,32,16,"YT:%c%3ld.%1ld %s", tgt_sign,
+                         (long)(tgt_abs / 10), (long)(tgt_abs % 10),
+                         yaw_status.enabled ? "ON " : "OFF");
+            OLED_vsprint(0,48,16,"yaw not ready  ");
+        } else if (status.status) {
             OLED_vsprint(0,0,16,"mpu failure    ");
             OLED_vsprint(0,16,16,"yaw target: ---");
             OLED_vsprint(0,32,16,"yaw now   : ---");
@@ -972,6 +1079,7 @@ static void uart_send_help(void)
 {
     uart0_sendStr("CMD BASE <rpm> | SPD <rpm> | YAW <deg> | YAW10 <deg10>\r\n");
     uart0_sendStr("CMD PIDY <kp_m> <ki_m> <kd_m> | OUTY <rpm>\r\n");
+    uart0_sendStr("CMD MINY <rpm> | DBY <deg10> | IZONEY <deg10> | ILIMY <rpm>\r\n");
     uart0_sendStr("CMD START | STOP | ESTOP | CLR | HELP\r\n");
 }
 
@@ -1064,6 +1172,58 @@ static void uart_handle_command(char *line)
             g_yaw_reset_request = true;
             taskEXIT_CRITICAL();
             uart0_sendStr("OK OUTY\r\n");
+        }
+        return;
+    }
+
+    if (strcmp(cmd, "MINY") == 0) {
+        arg1 = strtok(NULL, " \t");
+        if (arg1 != NULL) {
+            int32_t value = (int32_t)strtol(arg1, NULL, 10);
+            if (value < 0) value = -value;
+            taskENTER_CRITICAL();
+            g_yaw_min_turn_rpm = value;
+            taskEXIT_CRITICAL();
+            uart0_sendStr("OK MINY\r\n");
+        }
+        return;
+    }
+
+    if (strcmp(cmd, "DBY") == 0) {
+        arg1 = strtok(NULL, " \t");
+        if (arg1 != NULL) {
+            int32_t value = (int32_t)strtol(arg1, NULL, 10);
+            if (value < 0) value = -value;
+            taskENTER_CRITICAL();
+            g_yaw_deadband_deg10 = value;
+            taskEXIT_CRITICAL();
+            uart0_sendStr("OK DBY\r\n");
+        }
+        return;
+    }
+
+    if (strcmp(cmd, "IZONEY") == 0) {
+        arg1 = strtok(NULL, " \t");
+        if (arg1 != NULL) {
+            int32_t value = (int32_t)strtol(arg1, NULL, 10);
+            if (value < 0) value = -value;
+            taskENTER_CRITICAL();
+            g_yaw_integral_zone_deg10 = value;
+            taskEXIT_CRITICAL();
+            uart0_sendStr("OK IZONEY\r\n");
+        }
+        return;
+    }
+
+    if (strcmp(cmd, "ILIMY") == 0) {
+        arg1 = strtok(NULL, " \t");
+        if (arg1 != NULL) {
+            int32_t value = (int32_t)strtol(arg1, NULL, 10);
+            if (value < 0) value = -value;
+            taskENTER_CRITICAL();
+            g_yaw_integral_limit_rpm = value;
+            taskEXIT_CRITICAL();
+            uart0_sendStr("OK ILIMY\r\n");
         }
         return;
     }

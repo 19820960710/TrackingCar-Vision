@@ -24,7 +24,7 @@ def send(ser, cmd: str):
     print(f">>> {cmd}", flush=True)
 
 
-def collect(ser, duration_s: float):
+def collect(ser, duration_s: float, verbose: bool = True):
     records = []
     end = time.monotonic() + duration_s
     while time.monotonic() < end:
@@ -32,7 +32,7 @@ def collect(ser, duration_s: float):
         if not raw:
             continue
         text = raw.decode("utf-8", errors="replace").strip()
-        if text:
+        if text and verbose:
             print(text.encode("ascii", errors="replace").decode("ascii"), flush=True)
         tel = parse_tel(text)
         if tel:
@@ -44,7 +44,7 @@ def collect(ser, duration_s: float):
     return records, True
 
 
-def wait_attitude_ready(ser, timeout_s: float):
+def wait_attitude_ready(ser, timeout_s: float, verbose: bool = True):
     print(f"WAIT att=1 timeout={timeout_s}s", flush=True)
     end = time.monotonic() + timeout_s
     records = []
@@ -53,7 +53,7 @@ def wait_attitude_ready(ser, timeout_s: float):
         if not raw:
             continue
         text = raw.decode("utf-8", errors="replace").strip()
-        if text:
+        if text and verbose:
             print(text.encode("ascii", errors="replace").decode("ascii"), flush=True)
         tel = parse_tel(text)
         if tel:
@@ -100,14 +100,22 @@ def main():
     ap.add_argument("--port", default="COM19")
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--base", type=int, default=0, help="base speed rpm")
-    ap.add_argument("--kp", type=int, default=65, help="yaw Kp milli")
-    ap.add_argument("--ki", type=int, default=0, help="yaw Ki milli")
-    ap.add_argument("--kd", type=int, default=15, help="yaw Kd milli")
-    ap.add_argument("--out", type=int, default=80, help="yaw output limit rpm")
+    ap.add_argument("--kp", type=int, default=95, help="yaw Kp milli")
+    ap.add_argument("--ki", type=int, default=2, help="yaw Ki milli")
+    ap.add_argument("--kd", type=int, default=45, help="yaw Kd milli")
+    ap.add_argument("--out", type=int, default=160, help="yaw output limit rpm")
+    ap.add_argument("--min-turn", type=int, default=14, help="minimum yaw turn rpm feed-forward")
+    ap.add_argument("--deadband", type=int, default=15, help="yaw deadband deg10")
+    ap.add_argument("--izone", type=int, default=300, help="integral zone deg10")
+    ap.add_argument("--ilim", type=int, default=20, help="integral contribution limit rpm")
     ap.add_argument("--hold", type=float, default=5.0, help="seconds per yaw target")
+    ap.add_argument("--targets", default="0,450,900,1350,1800,0",
+                    help="comma separated yaw targets in deg10, e.g. 0 or 0,450,900")
+    ap.add_argument("--quiet", action="store_true", help="suppress raw TEL lines")
     args = ap.parse_args()
+    verbose = not args.quiet
 
-    plan = [0, 450, 900, 1350, 1800, 0]
+    plan = [int(item.strip()) for item in args.targets.split(",") if item.strip()]
     segments = []
 
     with serial.Serial(args.port, args.baud, timeout=0.2) as ser:
@@ -116,16 +124,24 @@ def main():
         ser.reset_input_buffer()
 
         send(ser, "CLR")
-        collect(ser, 0.8)
+        collect(ser, 0.8, verbose)
         send(ser, f"PIDY {args.kp} {args.ki} {args.kd}")
-        collect(ser, 0.5)
+        collect(ser, 0.5, verbose)
         send(ser, f"OUTY {args.out}")
-        collect(ser, 0.5)
+        collect(ser, 0.5, verbose)
+        send(ser, f"MINY {args.min_turn}")
+        collect(ser, 0.3, verbose)
+        send(ser, f"DBY {args.deadband}")
+        collect(ser, 0.3, verbose)
+        send(ser, f"IZONEY {args.izone}")
+        collect(ser, 0.3, verbose)
+        send(ser, f"ILIMY {args.ilim}")
+        collect(ser, 0.3, verbose)
         send(ser, f"BASE {args.base}")
-        collect(ser, 0.8)
+        collect(ser, 0.8, verbose)
         send(ser, "START")
-        collect(ser, 0.8)
-        _, ready = wait_attitude_ready(ser, 25.0)
+        collect(ser, 0.8, verbose)
+        _, ready = wait_attitude_ready(ser, 45.0, verbose)
         if not ready:
             print("ERROR: attitude not ready, abort", flush=True)
             send(ser, "STOP")
@@ -135,13 +151,13 @@ def main():
         for target in plan:
             name = f"yaw_{target // 10}deg"
             send(ser, f"YAW10 {target}")
-            records, ok = collect(ser, args.hold)
+            records, ok = collect(ser, args.hold, verbose)
             segments.append((name, records, target))
             if not ok:
                 break
 
         send(ser, "STOP")
-        collect(ser, 1.0)
+        collect(ser, 1.0, verbose)
 
     for seg in segments:
         analyze(*seg)
