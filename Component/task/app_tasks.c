@@ -50,13 +50,12 @@
 #include "pid/pid.h"
 #include <stdint.h>
 #include <stdbool.h>
-#include "UART/uart0.h"
-#include "stdio.h"
-
-
+#include "UART/uart0.h"          /* 调试串口 (printf 重定向) */
 /* ═══════════════════════════════════════════════════════════════════════════
  *  数据结构定义
- * ════════════╛
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
  * @brief MPU6050 姿态消息（通过 attitude_queue 传递）
  * @note  pitch10/roll10/yaw10 单位为 0.1°（放大 10 倍避免浮点传输）
  *        status == 0 表示数据有效，非 0 表示初始化失败
@@ -95,11 +94,9 @@ typedef struct {
 } yaw_target_msg_t;
 
 /**
- * @brief yaw 闭环状态（供 OLED 显示）
+ * @brief yaw 闭环运行状态（OLED 显示用）
  */
 typedef struct {
-    uint32_t seq;
-    uint32_t t_ms;
     int32_t base_speed_rpm;
     int32_t target_yaw_deg10;
     int32_t current_yaw_deg10;
@@ -134,17 +131,11 @@ static QueueHandle_t g_status_queue       = NULL;  /* 速度闭环 → OLED/调�
 static QueueHandle_t g_target_speed_queue = NULL;  /* yaw/巡线 → 速度闭环 */
 static QueueHandle_t g_yaw_target_queue   = NULL;  /* 按键/串口/上位机 → yaw 闭环 */
 
-/* ── yaw 闭环共享状态：按键/上层控制统一写入，yaw_loop_task 消费 ── */
+/* ── yaw 闭环共享状态：按键、串口和调试输出复用同一份目标 ── */
 static int32_t g_yaw_base_speed_rpm = 0;
 static int32_t g_yaw_target_deg10 = 0;
 static bool g_yaw_enabled = false;
-static bool g_yaw_reset_request = false;
-
-/* ── yaw 闭环默认参数：串口抗扰调试后的固化值 ── */
-static const int32_t YAW_MIN_TURN_RPM = 14;          /* 最小转向前馈，克服静摩擦/抗干扰 */
-static const int32_t YAW_DEADBAND_DEG10 = 15;        /* 1.5° 内认为到位，避免来回抖动 */
-static const int32_t YAW_INTEGRAL_ZONE_DEG10 = 300;  /* 30° 内才积分，避免大角度 windup */
-static const int32_t YAW_INTEGRAL_LIMIT_RPM = 20;    /* 积分项最大贡献 ±20RPM */
+static volatile bool g_speed_start_ff_enable = false; /* yaw 层根据误差开关低速前馈 */
 static yaw_status_t g_yaw_status = {0};
 
 /* ── 任务句柄 (Task Handle): ISR 中发送任务通知 ── */
@@ -235,9 +226,6 @@ static bool yaw_control_publish_state(int32_t base_speed_rpm,
     g_yaw_base_speed_rpm = target.base_speed_rpm;
     g_yaw_target_deg10 = target.target_yaw_deg10;
     g_yaw_enabled = target.enabled;
-    if (reset_pid) {
-        g_yaw_reset_request = true;
-    }
     taskEXIT_CRITICAL();
 
     return (xQueueOverwrite(g_yaw_target_queue, &target) == pdPASS);
@@ -530,13 +518,77 @@ static void YawKeySet_Task(void *pvParameters)
 #define YAW_LOOP_TIMER_TICK_MS     10
 #define YAW_LOOP_PERIOD_MS          50
 #define YAW_LOOP_DIVIDER            (YAW_LOOP_PERIOD_MS / YAW_LOOP_TIMER_TICK_MS)
-#define YAW_PID_DEFAULT_KP_MILLI    95
-#define YAW_PID_DEFAULT_KI_MILLI    2
-#define YAW_PID_DEFAULT_KD_MILLI    45
+#define YAW_PID_DEFAULT_KP_MILLI    80
+#define YAW_PID_DEFAULT_KI_MILLI    1
+#define YAW_PID_DEFAULT_KD_MILLI    60
 #define YAW_PID_OUTPUT_LIMIT_RPM    160
+#define YAW_DYNAMIC_CAP_BASE_RPM    12
+#define YAW_DYNAMIC_CAP_ERR_DIV     25
+#define YAW_MIN_TURN_RPM            15   /* 尾段最小转向速度补偿，仍走速度闭环 */
+#define YAW_DEADBAND_DEG10          15   /* 1.5° 内认为到位，兼顾静差与近目标抖动 */
+#define YAW_INTEGRAL_ZONE_DEG10     180  /* 18° 内才积分，避免大角度 windup */
+#define YAW_INTEGRAL_LIMIT_RPM      6    /* 积分项最大贡献 ±6RPM */
+#define YAW_MIN_TURN_ZONE_DEG10     180  /* 18° 内启用连续恢复速度曲线，避免中途停顿 */
+#define YAW_TARGET_RAMP_STEP_DEG10  80   /* 目标斜坡步长，单位 0.1°/50ms */
+#define YAW_RECOVER_MAX_TURN_RPM    30   /* 连续恢复曲线最大转向速度 */
+#define SPEED_START_FF_PWM          14   /* 低速启动前馈 PWM，由 yaw 层按误差开关 */
 
-static int32_t yaw_pid_compute_turn(pid_pos_t *pid, int32_t err_deg10)
+static int32_t yaw_recover_turn_for_error(int32_t abs_err_deg10,
+                                          int32_t deadband_deg10,
+                                          int32_t zone_deg10,
+                                          int32_t min_turn_rpm)
 {
+    int32_t span;
+    int32_t pos;
+
+    if (min_turn_rpm <= 0 || abs_err_deg10 <= deadband_deg10) {
+        return 0;
+    }
+    int32_t max_turn = YAW_RECOVER_MAX_TURN_RPM;
+    if (zone_deg10 <= deadband_deg10 || abs_err_deg10 >= zone_deg10) {
+        return max_turn;
+    }
+
+    span = zone_deg10 - deadband_deg10;
+    pos = abs_err_deg10 - deadband_deg10;
+    return min_turn_rpm +
+        ((max_turn - min_turn_rpm) * pos) / span;
+}
+
+static int32_t yaw_target_ramp_step(int32_t current_deg10,
+                                    int32_t target_deg10,
+                                    int32_t step_deg10)
+{
+    int32_t delta = normalize_angle_deg10(target_deg10 - current_deg10);
+
+    if (step_deg10 < 0) {
+        step_deg10 = -step_deg10;
+    }
+    if (step_deg10 == 0 || abs_i32(delta) <= step_deg10) {
+        return normalize_angle_deg10(target_deg10);
+    }
+
+    if (delta > 0) {
+        current_deg10 += step_deg10;
+    } else {
+        current_deg10 -= step_deg10;
+    }
+    return normalize_angle_deg10(current_deg10);
+}
+
+static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
+                                    int32_t err_deg10,
+                                    bool allow_static_boost,
+                                    int32_t *derr_out,
+                                    bool *boost_active_out)
+{
+    if (derr_out != NULL) {
+        *derr_out = 0;
+    }
+    if (boost_active_out != NULL) {
+        *boost_active_out = false;
+    }
+
     if (pid == NULL) {
         return 0;
     }
@@ -552,9 +604,20 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid, int32_t err_deg10)
     if (izone < deadband) izone = deadband;
     if (ilimit < 0) ilimit = -ilimit;
 
+    /* 软死区：误差落在 deadband 内不直接归零，而是线性衰减到一个很小的
+     * 保持转向速度，避免“刚到目标就瞬间失去修正力”导致的停顿。 */
     if (abs_err <= deadband) {
+        int32_t sign = (err_deg10 > 0) ? 1 : -1;
+        int32_t hold_turn = min_turn / 3;
+        if (hold_turn < 4) {
+            hold_turn = 4;
+        }
+        int32_t scaled = (abs_err * hold_turn) / (deadband > 0 ? deadband : 1);
         pid_pos_reset(pid);
-        return 0;
+        if (scaled < 3) {
+            return 0;
+        }
+        return (sign > 0) ? scaled : -scaled;
     }
 
     int32_t derr = 0;
@@ -562,6 +625,9 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid, int32_t err_deg10)
         pid->first_run = 0U;
     } else {
         derr = err_deg10 - pid->last_err;
+    }
+    if (derr_out != NULL) {
+        *derr_out = derr;
     }
 
     if (abs_err <= izone && pid->ki_milli != 0) {
@@ -595,9 +661,39 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid, int32_t err_deg10)
 
     int32_t output = milli_to_i32_round_local((int32_t)output_milli);
 
-    /* 小误差区如果 PID 输出过小，强制给最小转向前馈，解决静摩擦导致的静差。 */
-    if (min_turn > 0 && abs_err > deadband && abs_i32(output) < min_turn) {
-        output = (err_deg10 > 0) ? min_turn : -min_turn;
+    /*
+     * 非线性输出调度：大角度阶跃时限制最大转向速度，避免惯性过冲；
+     * 误差变小时动态限幅自动收窄，配合 D 项形成“刹车区”。
+     */
+    int32_t dynamic_limit = YAW_DYNAMIC_CAP_BASE_RPM +
+                            (abs_err / YAW_DYNAMIC_CAP_ERR_DIV);
+    if (dynamic_limit < min_turn) {
+        dynamic_limit = min_turn;
+    }
+    if (dynamic_limit > pid->out_max) {
+        dynamic_limit = pid->out_max;
+    }
+    output = clamp_i32_local(output, -dynamic_limit, dynamic_limit);
+
+    /*
+     * 最小速度补偿：目标斜坡完成后，小误差修正不能低于 MINY。
+     * 这里补的是 yaw 输出 turn_rpm，也就是左右轮速度目标差；
+     * 不绕过速度环，不直接拍 PWM，因此编码器速度环仍然负责闭环约束。
+     */
+    int32_t err_sign = (err_deg10 > 0) ? 1 : -1;
+    int32_t recover_turn = yaw_recover_turn_for_error(abs_err,
+                                                       deadband,
+                                                       YAW_MIN_TURN_ZONE_DEG10,
+                                                       min_turn);
+    bool output_same_direction = (output == 0) ||
+        ((output > 0 && err_sign > 0) || (output < 0 && err_sign < 0));
+    if (allow_static_boost && recover_turn > 0 &&
+        abs_err <= YAW_MIN_TURN_ZONE_DEG10 &&
+        output_same_direction && abs_i32(output) < recover_turn) {
+        output = (err_sign > 0) ? recover_turn : -recover_turn;
+        if (boost_active_out != NULL) {
+            *boost_active_out = true;
+        }
     }
 
     output = clamp_i32_local(output, pid->out_min, pid->out_max);
@@ -614,6 +710,8 @@ static void yaw_loop_task(void *pvParameters)
     yaw_target_msg_t target = {0, 0, false, true};
     yaw_status_t status = {0};
     uint32_t tick_divider = 0;
+    int32_t control_target_yaw_deg10 = 0;
+    bool control_target_initialized = false;
 
     pid_pos_init(&yaw_pid, YAW_PID_DEFAULT_KP_MILLI,
                  YAW_PID_DEFAULT_KI_MILLI,
@@ -642,18 +740,9 @@ static void yaw_loop_task(void *pvParameters)
             }
         }
 
-        if (g_yaw_reset_request) {
-            taskENTER_CRITICAL();
-            g_yaw_reset_request = false;
-            taskEXIT_CRITICAL();
-            pid_pos_reset(&yaw_pid);
-        }
-
         if (do_yaw_control) {
             attitude_msg_t attitude;
 
-            status.seq++;
-            status.t_ms = (uint32_t)xTaskGetTickCount();
             status.base_speed_rpm = target.base_speed_rpm;
             status.target_yaw_deg10 = target.target_yaw_deg10;
             status.enabled = g_yaw_enabled;
@@ -664,12 +753,16 @@ static void yaw_loop_task(void *pvParameters)
                 status.turn_rpm = 0;
                 status.left_cmd_rpm = 0;
                 status.right_cmd_rpm = 0;
+                control_target_initialized = false;
+                g_speed_start_ff_enable = false;
             } else if (xQueuePeek(g_attitude_queue, &attitude, 0) != pdPASS ||
                        attitude.status != 0) {
                 pid_pos_reset(&yaw_pid);
                 status.turn_rpm = 0;
                 status.left_cmd_rpm = 0;
                 status.right_cmd_rpm = 0;
+                control_target_initialized = false;
+                g_speed_start_ff_enable = false;
                 (void)app_tasks_set_wheel_speed_target(0, 0);
             } else {
                 status.attitude_valid = true;
@@ -678,8 +771,28 @@ static void yaw_loop_task(void *pvParameters)
                 status.error_yaw_deg10 = normalize_angle_deg10(
                     target.target_yaw_deg10 - status.current_yaw_deg10);
 
+                if (!control_target_initialized) {
+                    control_target_yaw_deg10 = status.current_yaw_deg10;
+                    control_target_initialized = true;
+                }
+                control_target_yaw_deg10 = yaw_target_ramp_step(
+                    control_target_yaw_deg10,
+                    target.target_yaw_deg10,
+                    YAW_TARGET_RAMP_STEP_DEG10);
+
+                int32_t control_error_yaw_deg10 = normalize_angle_deg10(
+                    control_target_yaw_deg10 - status.current_yaw_deg10);
+                bool allow_static_boost = (control_target_yaw_deg10 ==
+                                           target.target_yaw_deg10);
                 status.turn_rpm = yaw_pid_compute_turn(&yaw_pid,
-                                                       status.error_yaw_deg10);
+                                                       control_error_yaw_deg10,
+                                                       allow_static_boost,
+                                                       NULL,
+                                                       NULL);
+                /* 误差仍超过死区且需要转向修正时，才允许速度低速前馈；
+                 * 进入死区/到位后关闭，避免末端被 FFS 推一下造成抖动。 */
+                g_speed_start_ff_enable = (status.turn_rpm != 0 &&
+                    abs_i32(status.error_yaw_deg10) > YAW_DEADBAND_DEG10);
 
                 /* yaw PID 输出为差速修正量。若实测发现越修越偏，交换这里的正负号。 */
                 status.left_cmd_rpm = target.base_speed_rpm - status.turn_rpm;
@@ -772,6 +885,37 @@ static void yaw_loop_task(void *pvParameters)
  * @brief 速度目标斜坡步进，每 50ms 最多变化 30RPM，降低换档/反向冲击
  */
 #define SPEED_RAMP_STEP_RPM         80
+#define SPEED_START_FF_SETPOINT_RPM 60
+#define SPEED_START_FF_ERR_RPM 2
+
+static int32_t speed_apply_start_feedforward(int32_t pwm,
+                                             int32_t setpoint_rpm,
+                                             int32_t measured_rpm)
+{
+    int32_t ff_pwm = SPEED_START_FF_PWM;
+    int32_t sign;
+
+    if (ff_pwm < 0) {
+        ff_pwm = -ff_pwm;
+    }
+    if (ff_pwm == 0 || setpoint_rpm == 0 ||
+        abs_i32(setpoint_rpm) > SPEED_START_FF_SETPOINT_RPM ||
+        abs_i32(setpoint_rpm - measured_rpm) <= SPEED_START_FF_ERR_RPM) {
+        return pwm;
+    }
+    if (!g_speed_start_ff_enable) {
+        return pwm;
+    }
+
+    sign = (setpoint_rpm > 0) ? 1 : -1;
+    if (pwm != 0 && ((pwm > 0 && sign < 0) || (pwm < 0 && sign > 0))) {
+        return pwm;
+    }
+    if (abs_i32(pwm) >= ff_pwm) {
+        return pwm;
+    }
+    return (sign > 0) ? ff_pwm : -ff_pwm;
+}
 
 static void speed_loop_task(void *pvParameters)
 {
@@ -914,6 +1058,11 @@ static void speed_loop_task(void *pvParameters)
             status.right_pwm = pid_inc_compute(&right_pid,
                 status.right_setpoint_rpm, status.right_rpm);
 
+            status.left_pwm = speed_apply_start_feedforward(status.left_pwm,
+                status.left_setpoint_rpm, status.left_rpm);
+            status.right_pwm = speed_apply_start_feedforward(status.right_pwm,
+                status.right_setpoint_rpm, status.right_rpm);
+
             if (status.left_target_rpm == 0 && status.right_target_rpm == 0 &&
                 status.left_setpoint_rpm == 0 && status.right_setpoint_rpm == 0) {
                 /* 目标为零且斜坡已归零: 滑行停止 */
@@ -1018,24 +1167,6 @@ static void oled_task(void *pvParameters)
     }
 }
 
-
-static void debug_print(void *pvParameters)
-{
-    (void)pvParameters;
-    char buf[128];
-
-    for (;;) {
-        attitude_msg_t new_status;
-
-        if (xQueuePeek(g_attitude_queue, &new_status, 0) == pdPASS) {
-            snprintf(buf, sizeof(buf), "%.2f\r\n",
-                     (float)new_status.yaw);
-            uart0_sendStr(buf);
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-}
 /* ═══════════════════════════════════════════════════════════════════════════
  *  调度器启动函数
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -1098,8 +1229,6 @@ void app_tasks_start(void)
 
     /* OLED 显示: 含 OLED 显存 (128×8=1024字节) + I2C 通信缓冲 */
     xTaskCreate(oled_task,       "OLED",     512, NULL, 1, NULL);
-
-    xTaskCreate(debug_print,      "DEBUG",    256, NULL, 1, NULL);
 
     /* ── 启动 FreeRTOS 调度器 ──
      * 此后 CPU 控制权交给调度器, 本函数不再返回
