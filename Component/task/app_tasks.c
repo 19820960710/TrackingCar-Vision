@@ -146,14 +146,15 @@ static int32_t g_yaw_target_deg10 = 0;
 static bool g_yaw_enabled = false;
 static bool g_yaw_estop_latched = false;
 static bool g_yaw_reset_request = false;
-static int32_t g_yaw_kp_milli = 95;   /* yaw 角环串口抗扰实测最优默认值 */
-static int32_t g_yaw_ki_milli = 2;    /* 小积分，仅在小误差区启用，消除静态误差 */
-static int32_t g_yaw_kd_milli = 45;   /* 阻尼项，抑制提高 Kp/限幅后的超调 */
+static int32_t g_yaw_kp_milli = 80;   /* 第二轮调试默认值：降低 P，配合目标斜坡抑制超调 */
+static int32_t g_yaw_ki_milli = 1;    /* 小积分，仅在小误差区启用，减小静态误差 */
+static int32_t g_yaw_kd_milli = 60;   /* 增强阻尼，减少目标附近来回找正 */
 static int32_t g_yaw_out_limit_rpm = 160;
-static int32_t g_yaw_min_turn_rpm = 14;        /* 最小转向前馈，克服静摩擦/抗干扰 */
-static int32_t g_yaw_deadband_deg10 = 15;      /* 1.5° 内认为到位，避免来回抖动 */
-static int32_t g_yaw_integral_zone_deg10 = 300;/* 30° 内才积分，避免大角度 windup */
-static int32_t g_yaw_integral_limit_rpm = 20;  /* 积分项最大贡献 ±20RPM */
+static int32_t g_yaw_min_turn_rpm = 0;         /* 第二轮调试关闭硬最小前馈，避免目标附近推过头 */
+static int32_t g_yaw_deadband_deg10 = 30;      /* 3.0° 死区，优先抑制近目标抖动 */
+static int32_t g_yaw_integral_zone_deg10 = 180;/* 18° 内才积分，避免大角度 windup */
+static int32_t g_yaw_integral_limit_rpm = 6;   /* 积分项最大贡献 ±6RPM */
+static int32_t g_yaw_min_turn_zone_deg10 = 250;/* 只在小误差区启用最小前馈，避免大角度推过头 */
 static bool g_yaw_pid_config_dirty = false;
 static yaw_debug_status_t g_yaw_debug_status = {0};
 
@@ -544,10 +545,34 @@ static void YawKeySet_Task(void *pvParameters)
 #define YAW_LOOP_TIMER_TICK_MS     10
 #define YAW_LOOP_PERIOD_MS          50
 #define YAW_LOOP_DIVIDER            (YAW_LOOP_PERIOD_MS / YAW_LOOP_TIMER_TICK_MS)
-#define YAW_PID_DEFAULT_KP_MILLI    95
-#define YAW_PID_DEFAULT_KI_MILLI    2
-#define YAW_PID_DEFAULT_KD_MILLI    45
+#define YAW_PID_DEFAULT_KP_MILLI    80
+#define YAW_PID_DEFAULT_KI_MILLI    1
+#define YAW_PID_DEFAULT_KD_MILLI    60
 #define YAW_PID_OUTPUT_LIMIT_RPM    160
+#define YAW_DYNAMIC_CAP_BASE_RPM    12
+#define YAW_DYNAMIC_CAP_ERR_DIV     25
+#define YAW_TARGET_RAMP_STEP_DEG10  80
+
+static int32_t yaw_target_ramp_step(int32_t current_deg10,
+                                    int32_t target_deg10,
+                                    int32_t step_deg10)
+{
+    int32_t delta = normalize_angle_deg10(target_deg10 - current_deg10);
+
+    if (step_deg10 < 0) {
+        step_deg10 = -step_deg10;
+    }
+    if (step_deg10 == 0 || abs_i32(delta) <= step_deg10) {
+        return normalize_angle_deg10(target_deg10);
+    }
+
+    if (delta > 0) {
+        current_deg10 += step_deg10;
+    } else {
+        current_deg10 -= step_deg10;
+    }
+    return normalize_angle_deg10(current_deg10);
+}
 
 static int32_t yaw_pid_compute_turn(pid_pos_t *pid, int32_t err_deg10)
 {
@@ -609,8 +634,24 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid, int32_t err_deg10)
 
     int32_t output = milli_to_i32_round_local((int32_t)output_milli);
 
+    /*
+     * 非线性输出调度：大角度阶跃时限制最大转向速度，避免惯性过冲；
+     * 误差变小时动态限幅自动收窄，配合 D 项形成“刹车区”。
+     */
+    int32_t dynamic_limit = YAW_DYNAMIC_CAP_BASE_RPM +
+                            (abs_err / YAW_DYNAMIC_CAP_ERR_DIV);
+    if (dynamic_limit < min_turn) {
+        dynamic_limit = min_turn;
+    }
+    if (dynamic_limit > pid->out_max) {
+        dynamic_limit = pid->out_max;
+    }
+    output = clamp_i32_local(output, -dynamic_limit, dynamic_limit);
+
     /* 小误差区如果 PID 输出过小，强制给最小转向前馈，解决静摩擦导致的静差。 */
-    if (min_turn > 0 && abs_err > deadband && abs_i32(output) < min_turn) {
+    if (min_turn > 0 && abs_err > deadband &&
+        abs_err <= g_yaw_min_turn_zone_deg10 &&
+        abs_i32(output) < min_turn) {
         output = (err_deg10 > 0) ? min_turn : -min_turn;
     }
 
@@ -628,6 +669,8 @@ static void yaw_loop_task(void *pvParameters)
     yaw_target_msg_t target = {0, 0, false, true};
     yaw_debug_status_t debug = {0};
     uint32_t tick_divider = 0;
+    int32_t control_target_yaw_deg10 = 0;
+    bool control_target_initialized = false;
 
     pid_pos_init(&yaw_pid, YAW_PID_DEFAULT_KP_MILLI,
                  YAW_PID_DEFAULT_KI_MILLI,
@@ -697,6 +740,7 @@ static void yaw_loop_task(void *pvParameters)
                 debug.turn_rpm = 0;
                 debug.left_cmd_rpm = 0;
                 debug.right_cmd_rpm = 0;
+                control_target_initialized = false;
                 (void)app_tasks_set_wheel_speed_target(0, 0);
                 tb6612_stop();
             } else if (!target.enabled) {
@@ -704,12 +748,14 @@ static void yaw_loop_task(void *pvParameters)
                 debug.turn_rpm = 0;
                 debug.left_cmd_rpm = 0;
                 debug.right_cmd_rpm = 0;
+                control_target_initialized = false;
             } else if (xQueuePeek(g_attitude_queue, &attitude, 0) != pdPASS ||
                        attitude.status != 0) {
                 pid_pos_reset(&yaw_pid);
                 debug.turn_rpm = 0;
                 debug.left_cmd_rpm = 0;
                 debug.right_cmd_rpm = 0;
+                control_target_initialized = false;
                 (void)app_tasks_set_wheel_speed_target(0, 0);
             } else {
                 debug.attitude_valid = true;
@@ -718,8 +764,19 @@ static void yaw_loop_task(void *pvParameters)
                 debug.error_yaw_deg10 = normalize_angle_deg10(
                     target.target_yaw_deg10 - debug.current_yaw_deg10);
 
+                if (!control_target_initialized) {
+                    control_target_yaw_deg10 = debug.current_yaw_deg10;
+                    control_target_initialized = true;
+                }
+                control_target_yaw_deg10 = yaw_target_ramp_step(
+                    control_target_yaw_deg10,
+                    target.target_yaw_deg10,
+                    YAW_TARGET_RAMP_STEP_DEG10);
+
+                int32_t control_error_yaw_deg10 = normalize_angle_deg10(
+                    control_target_yaw_deg10 - debug.current_yaw_deg10);
                 debug.turn_rpm = yaw_pid_compute_turn(&yaw_pid,
-                                                       debug.error_yaw_deg10);
+                                                       control_error_yaw_deg10);
 
                 /* yaw PID 输出为差速修正量。若实测发现越修越偏，交换这里的正负号。 */
                 debug.left_cmd_rpm = target.base_speed_rpm - debug.turn_rpm;
