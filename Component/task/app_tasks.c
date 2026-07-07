@@ -50,10 +50,6 @@
 #include "pid/pid.h"
 #include <stdint.h>
 #include <stdbool.h>
-#include <stdlib.h>
-#include <string.h>
-#include "UART/uart0.h"          /* 调试串口 (printf 重定向 + 收发双任务) */
-#include "stdio.h"
 /* ═══════════════════════════════════════════════════════════════════════════
  *  数据结构定义
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -97,7 +93,7 @@ typedef struct {
 } yaw_target_msg_t;
 
 /**
- * @brief yaw 闭环调试状态（debug_print 任务输出 TEL）
+ * @brief yaw 闭环状态（供 OLED 显示）
  */
 typedef struct {
     uint32_t seq;
@@ -109,13 +105,9 @@ typedef struct {
     int32_t turn_rpm;
     int32_t left_cmd_rpm;
     int32_t right_cmd_rpm;
-    int32_t kp_milli;
-    int32_t ki_milli;
-    int32_t kd_milli;
     bool enabled;
-    bool estop_latched;
     bool attitude_valid;
-} yaw_debug_status_t;
+} yaw_status_t;
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  速度档位表
@@ -140,22 +132,18 @@ static QueueHandle_t g_status_queue       = NULL;  /* 速度闭环 → OLED/调�
 static QueueHandle_t g_target_speed_queue = NULL;  /* yaw/巡线 → 速度闭环 */
 static QueueHandle_t g_yaw_target_queue   = NULL;  /* 按键/串口/上位机 → yaw 闭环 */
 
-/* ── yaw 闭环共享状态：按键、串口和调试输出复用同一份目标 ── */
+/* ── yaw 闭环共享状态：按键/上层控制统一写入，yaw_loop_task 消费 ── */
 static int32_t g_yaw_base_speed_rpm = 0;
 static int32_t g_yaw_target_deg10 = 0;
 static bool g_yaw_enabled = false;
-static bool g_yaw_estop_latched = false;
 static bool g_yaw_reset_request = false;
-static int32_t g_yaw_kp_milli = 95;   /* yaw 角环串口抗扰实测最优默认值 */
-static int32_t g_yaw_ki_milli = 2;    /* 小积分，仅在小误差区启用，消除静态误差 */
-static int32_t g_yaw_kd_milli = 45;   /* 阻尼项，抑制提高 Kp/限幅后的超调 */
-static int32_t g_yaw_out_limit_rpm = 160;
-static int32_t g_yaw_min_turn_rpm = 14;        /* 最小转向前馈，克服静摩擦/抗干扰 */
-static int32_t g_yaw_deadband_deg10 = 15;      /* 1.5° 内认为到位，避免来回抖动 */
-static int32_t g_yaw_integral_zone_deg10 = 300;/* 30° 内才积分，避免大角度 windup */
-static int32_t g_yaw_integral_limit_rpm = 20;  /* 积分项最大贡献 ±20RPM */
-static bool g_yaw_pid_config_dirty = false;
-static yaw_debug_status_t g_yaw_debug_status = {0};
+
+/* ── yaw 闭环默认参数：串口抗扰调试后的固化值 ── */
+static const int32_t YAW_MIN_TURN_RPM = 14;          /* 最小转向前馈，克服静摩擦/抗干扰 */
+static const int32_t YAW_DEADBAND_DEG10 = 15;        /* 1.5° 内认为到位，避免来回抖动 */
+static const int32_t YAW_INTEGRAL_ZONE_DEG10 = 300;  /* 30° 内才积分，避免大角度 windup */
+static const int32_t YAW_INTEGRAL_LIMIT_RPM = 20;    /* 积分项最大贡献 ±20RPM */
+static yaw_status_t g_yaw_status = {0};
 
 /* ── 任务句柄 (Task Handle): ISR 中发送任务通知 ── */
 static TaskHandle_t g_mpu_task_handle        = NULL;  /* MPU6050 姿态任务 */
@@ -282,10 +270,6 @@ bool app_tasks_set_wheel_speed_target(int32_t left_rpm, int32_t right_rpm)
 
 bool app_tasks_set_yaw_target(int32_t base_speed_rpm, int32_t target_yaw_deg10)
 {
-    if (g_yaw_estop_latched) {
-        return false;
-    }
-
     return yaw_control_publish_state(base_speed_rpm, target_yaw_deg10,
                                      true, true);
 }
@@ -556,10 +540,10 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid, int32_t err_deg10)
     }
 
     int32_t abs_err = abs_i32(err_deg10);
-    int32_t deadband = g_yaw_deadband_deg10;
-    int32_t min_turn = g_yaw_min_turn_rpm;
-    int32_t izone = g_yaw_integral_zone_deg10;
-    int32_t ilimit = g_yaw_integral_limit_rpm;
+    int32_t deadband = YAW_DEADBAND_DEG10;
+    int32_t min_turn = YAW_MIN_TURN_RPM;
+    int32_t izone = YAW_INTEGRAL_ZONE_DEG10;
+    int32_t ilimit = YAW_INTEGRAL_LIMIT_RPM;
 
     if (deadband < 0) deadband = -deadband;
     if (min_turn < 0) min_turn = -min_turn;
@@ -626,7 +610,7 @@ static void yaw_loop_task(void *pvParameters)
 
     pid_pos_t yaw_pid;
     yaw_target_msg_t target = {0, 0, false, true};
-    yaw_debug_status_t debug = {0};
+    yaw_status_t status = {0};
     uint32_t tick_divider = 0;
 
     pid_pos_init(&yaw_pid, YAW_PID_DEFAULT_KP_MILLI,
@@ -656,21 +640,6 @@ static void yaw_loop_task(void *pvParameters)
             }
         }
 
-        if (g_yaw_pid_config_dirty) {
-            int32_t limit;
-            taskENTER_CRITICAL();
-            pid_pos_set_gain(&yaw_pid, g_yaw_kp_milli,
-                             g_yaw_ki_milli, g_yaw_kd_milli);
-            limit = g_yaw_out_limit_rpm;
-            g_yaw_pid_config_dirty = false;
-            taskEXIT_CRITICAL();
-            if (limit < 0) {
-                limit = -limit;
-            }
-            pid_pos_set_output_limit(&yaw_pid, -limit, limit);
-            pid_pos_reset(&yaw_pid);
-        }
-
         if (g_yaw_reset_request) {
             taskENTER_CRITICAL();
             g_yaw_reset_request = false;
@@ -681,55 +650,44 @@ static void yaw_loop_task(void *pvParameters)
         if (do_yaw_control) {
             attitude_msg_t attitude;
 
-            debug.seq++;
-            debug.t_ms = (uint32_t)xTaskGetTickCount();
-            debug.base_speed_rpm = target.base_speed_rpm;
-            debug.target_yaw_deg10 = target.target_yaw_deg10;
-            debug.kp_milli = yaw_pid.kp_milli;
-            debug.ki_milli = yaw_pid.ki_milli;
-            debug.kd_milli = yaw_pid.kd_milli;
-            debug.enabled = g_yaw_enabled;
-            debug.estop_latched = g_yaw_estop_latched;
-            debug.attitude_valid = false;
+            status.seq++;
+            status.t_ms = (uint32_t)xTaskGetTickCount();
+            status.base_speed_rpm = target.base_speed_rpm;
+            status.target_yaw_deg10 = target.target_yaw_deg10;
+            status.enabled = g_yaw_enabled;
+            status.attitude_valid = false;
 
-            if (g_yaw_estop_latched) {
+            if (!target.enabled) {
                 pid_pos_reset(&yaw_pid);
-                debug.turn_rpm = 0;
-                debug.left_cmd_rpm = 0;
-                debug.right_cmd_rpm = 0;
-                (void)app_tasks_set_wheel_speed_target(0, 0);
-                tb6612_stop();
-            } else if (!target.enabled) {
-                pid_pos_reset(&yaw_pid);
-                debug.turn_rpm = 0;
-                debug.left_cmd_rpm = 0;
-                debug.right_cmd_rpm = 0;
+                status.turn_rpm = 0;
+                status.left_cmd_rpm = 0;
+                status.right_cmd_rpm = 0;
             } else if (xQueuePeek(g_attitude_queue, &attitude, 0) != pdPASS ||
                        attitude.status != 0) {
                 pid_pos_reset(&yaw_pid);
-                debug.turn_rpm = 0;
-                debug.left_cmd_rpm = 0;
-                debug.right_cmd_rpm = 0;
+                status.turn_rpm = 0;
+                status.left_cmd_rpm = 0;
+                status.right_cmd_rpm = 0;
                 (void)app_tasks_set_wheel_speed_target(0, 0);
             } else {
-                debug.attitude_valid = true;
-                debug.current_yaw_deg10 = normalize_angle_deg10(
+                status.attitude_valid = true;
+                status.current_yaw_deg10 = normalize_angle_deg10(
                     float_deg_to_deg10(attitude.yaw));
-                debug.error_yaw_deg10 = normalize_angle_deg10(
-                    target.target_yaw_deg10 - debug.current_yaw_deg10);
+                status.error_yaw_deg10 = normalize_angle_deg10(
+                    target.target_yaw_deg10 - status.current_yaw_deg10);
 
-                debug.turn_rpm = yaw_pid_compute_turn(&yaw_pid,
-                                                       debug.error_yaw_deg10);
+                status.turn_rpm = yaw_pid_compute_turn(&yaw_pid,
+                                                       status.error_yaw_deg10);
 
                 /* yaw PID 输出为差速修正量。若实测发现越修越偏，交换这里的正负号。 */
-                debug.left_cmd_rpm = target.base_speed_rpm - debug.turn_rpm;
-                debug.right_cmd_rpm = target.base_speed_rpm + debug.turn_rpm;
+                status.left_cmd_rpm = target.base_speed_rpm - status.turn_rpm;
+                status.right_cmd_rpm = target.base_speed_rpm + status.turn_rpm;
 
-                (void)app_tasks_set_wheel_speed_target(debug.left_cmd_rpm,
-                                                       debug.right_cmd_rpm);
+                (void)app_tasks_set_wheel_speed_target(status.left_cmd_rpm,
+                                                       status.right_cmd_rpm);
             }
 
-            g_yaw_debug_status = debug;
+            g_yaw_status = status;
         }
 
         /* yaw_loop_task 完成目标更新后，再唤醒速度闭环任务。 */
@@ -1016,7 +974,7 @@ static void oled_task(void *pvParameters)
         }
         
         if (!attitude_seen) {
-            yaw_debug_status_t yaw_status = g_yaw_debug_status;
+            yaw_status_t yaw_status = g_yaw_status;
             int32_t tgt_abs = abs_i32(yaw_status.target_yaw_deg10);
             char tgt_sign = (yaw_status.target_yaw_deg10 < 0) ? '-' : ' ';
             OLED_vsprint(0,0,16,"MPU stabilizing");
@@ -1031,7 +989,7 @@ static void oled_task(void *pvParameters)
             OLED_vsprint(0,32,16,"yaw now   : ---");
             OLED_vsprint(0,48,16,"check MPU6050  ");
         } else {
-            yaw_debug_status_t yaw_status = g_yaw_debug_status;
+            yaw_status_t yaw_status = g_yaw_status;
             int32_t tgt_abs = abs_i32(yaw_status.target_yaw_deg10);
             int32_t now_abs = abs_i32(float_deg_to_deg10(status.yaw));
             int32_t err_abs = abs_i32(yaw_status.error_yaw_deg10);
@@ -1055,299 +1013,6 @@ static void oled_task(void *pvParameters)
 
         /* 100ms 刷新周期 (OLED I2C 传输耗约 30ms, 剩余时间让出 CPU) */
         vTaskDelay(pdMS_TO_TICKS(200));
-    }
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
- *  任务 7: 串口 yaw 调试命令任务 (优先级 1, 栈 384)
- *  ───────────────────────────────────────────
- *  命令:
- *    BASE <rpm>      设置基准速度并使能 yaw 闭环
- *    SPD <rpm>       BASE 的别名，兼容旧调试习惯
- *    YAW <deg>       设置期望 yaw 角，单位 °
- *    YAW10 <deg10>   设置期望 yaw 角，单位 0.1°
- *    PIDY <kp> <ki> <kd>  设置 yaw PID，参数为 milli 整数
- *    OUTY <rpm>      设置 yaw PID 输出限幅
- *    START           清除 ESTOP，并按当前 base/yaw 使能闭环
- *    STOP            关闭闭环并停车
- *    ESTOP           锁存急停，立即停车
- *    CLR             清除急停，保持闭环关闭并复位 PID
- *    HELP            打印命令帮助
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-static void uart_send_help(void)
-{
-    uart0_sendStr("CMD BASE <rpm> | SPD <rpm> | YAW <deg> | YAW10 <deg10>\r\n");
-    uart0_sendStr("CMD PIDY <kp_m> <ki_m> <kd_m> | OUTY <rpm>\r\n");
-    uart0_sendStr("CMD MINY <rpm> | DBY <deg10> | IZONEY <deg10> | ILIMY <rpm>\r\n");
-    uart0_sendStr("CMD START | STOP | ESTOP | CLR | HELP\r\n");
-}
-
-static void uart_handle_command(char *line)
-{
-    char *cmd = strtok(line, " \t");
-    char *arg1;
-    char *arg2;
-    char *arg3;
-    int32_t base_speed_rpm;
-    int32_t target_yaw_deg10;
-
-    if (cmd == NULL) {
-        return;
-    }
-
-    if (strcmp(cmd, "HELP") == 0 || strcmp(cmd, "?") == 0) {
-        uart_send_help();
-        return;
-    }
-
-    yaw_get_target_snapshot(&base_speed_rpm, &target_yaw_deg10);
-
-    if (strcmp(cmd, "BASE") == 0 || strcmp(cmd, "SPD") == 0) {
-        arg1 = strtok(NULL, " \t");
-        if (arg1 != NULL) {
-            base_speed_rpm = (int32_t)strtol(arg1, NULL, 10);
-            if (app_tasks_set_yaw_target(base_speed_rpm, target_yaw_deg10)) {
-                uart0_sendStr("OK BASE\r\n");
-            } else {
-                uart0_sendStr("ERR ESTOP_OR_QUEUE\r\n");
-            }
-        }
-        return;
-    }
-
-    if (strcmp(cmd, "YAW") == 0) {
-        arg1 = strtok(NULL, " \t");
-        if (arg1 != NULL) {
-            target_yaw_deg10 = (int32_t)strtol(arg1, NULL, 10) * 10;
-            if (app_tasks_set_yaw_target(base_speed_rpm, target_yaw_deg10)) {
-                uart0_sendStr("OK YAW\r\n");
-            } else {
-                uart0_sendStr("ERR ESTOP_OR_QUEUE\r\n");
-            }
-        }
-        return;
-    }
-
-    if (strcmp(cmd, "YAW10") == 0) {
-        arg1 = strtok(NULL, " \t");
-        if (arg1 != NULL) {
-            target_yaw_deg10 = (int32_t)strtol(arg1, NULL, 10);
-            if (app_tasks_set_yaw_target(base_speed_rpm, target_yaw_deg10)) {
-                uart0_sendStr("OK YAW10\r\n");
-            } else {
-                uart0_sendStr("ERR ESTOP_OR_QUEUE\r\n");
-            }
-        }
-        return;
-    }
-
-    if (strcmp(cmd, "PIDY") == 0) {
-        arg1 = strtok(NULL, " \t");
-        arg2 = strtok(NULL, " \t");
-        arg3 = strtok(NULL, " \t");
-        if (arg1 != NULL && arg2 != NULL && arg3 != NULL) {
-            taskENTER_CRITICAL();
-            g_yaw_kp_milli = (int32_t)strtol(arg1, NULL, 10);
-            g_yaw_ki_milli = (int32_t)strtol(arg2, NULL, 10);
-            g_yaw_kd_milli = (int32_t)strtol(arg3, NULL, 10);
-            g_yaw_pid_config_dirty = true;
-            g_yaw_reset_request = true;
-            taskEXIT_CRITICAL();
-            uart0_sendStr("OK PIDY\r\n");
-        }
-        return;
-    }
-
-    if (strcmp(cmd, "OUTY") == 0) {
-        arg1 = strtok(NULL, " \t");
-        if (arg1 != NULL) {
-            int32_t limit = (int32_t)strtol(arg1, NULL, 10);
-            if (limit < 0) {
-                limit = -limit;
-            }
-            taskENTER_CRITICAL();
-            g_yaw_out_limit_rpm = limit;
-            g_yaw_pid_config_dirty = true;
-            g_yaw_reset_request = true;
-            taskEXIT_CRITICAL();
-            uart0_sendStr("OK OUTY\r\n");
-        }
-        return;
-    }
-
-    if (strcmp(cmd, "MINY") == 0) {
-        arg1 = strtok(NULL, " \t");
-        if (arg1 != NULL) {
-            int32_t value = (int32_t)strtol(arg1, NULL, 10);
-            if (value < 0) value = -value;
-            taskENTER_CRITICAL();
-            g_yaw_min_turn_rpm = value;
-            taskEXIT_CRITICAL();
-            uart0_sendStr("OK MINY\r\n");
-        }
-        return;
-    }
-
-    if (strcmp(cmd, "DBY") == 0) {
-        arg1 = strtok(NULL, " \t");
-        if (arg1 != NULL) {
-            int32_t value = (int32_t)strtol(arg1, NULL, 10);
-            if (value < 0) value = -value;
-            taskENTER_CRITICAL();
-            g_yaw_deadband_deg10 = value;
-            taskEXIT_CRITICAL();
-            uart0_sendStr("OK DBY\r\n");
-        }
-        return;
-    }
-
-    if (strcmp(cmd, "IZONEY") == 0) {
-        arg1 = strtok(NULL, " \t");
-        if (arg1 != NULL) {
-            int32_t value = (int32_t)strtol(arg1, NULL, 10);
-            if (value < 0) value = -value;
-            taskENTER_CRITICAL();
-            g_yaw_integral_zone_deg10 = value;
-            taskEXIT_CRITICAL();
-            uart0_sendStr("OK IZONEY\r\n");
-        }
-        return;
-    }
-
-    if (strcmp(cmd, "ILIMY") == 0) {
-        arg1 = strtok(NULL, " \t");
-        if (arg1 != NULL) {
-            int32_t value = (int32_t)strtol(arg1, NULL, 10);
-            if (value < 0) value = -value;
-            taskENTER_CRITICAL();
-            g_yaw_integral_limit_rpm = value;
-            taskEXIT_CRITICAL();
-            uart0_sendStr("OK ILIMY\r\n");
-        }
-        return;
-    }
-
-    if (strcmp(cmd, "START") == 0) {
-        taskENTER_CRITICAL();
-        g_yaw_estop_latched = false;
-        taskEXIT_CRITICAL();
-        (void)yaw_control_publish_state(base_speed_rpm, target_yaw_deg10,
-                                        true, true);
-        uart0_sendStr("OK START\r\n");
-        return;
-    }
-
-    if (strcmp(cmd, "STOP") == 0) {
-        (void)yaw_control_publish_state(base_speed_rpm, target_yaw_deg10,
-                                        false, true);
-        (void)app_tasks_set_wheel_speed_target(0, 0);
-        tb6612_stop();
-        uart0_sendStr("OK STOP\r\n");
-        return;
-    }
-
-    if (strcmp(cmd, "ESTOP") == 0) {
-        taskENTER_CRITICAL();
-        g_yaw_estop_latched = true;
-        g_yaw_enabled = false;
-        g_yaw_reset_request = true;
-        taskEXIT_CRITICAL();
-        (void)yaw_control_publish_state(0, target_yaw_deg10, false, true);
-        (void)app_tasks_set_wheel_speed_target(0, 0);
-        tb6612_stop();
-        uart0_sendStr("EVT ESTOP\r\n");
-        return;
-    }
-
-    if (strcmp(cmd, "CLR") == 0) {
-        taskENTER_CRITICAL();
-        g_yaw_estop_latched = false;
-        g_yaw_reset_request = true;
-        taskEXIT_CRITICAL();
-        (void)yaw_control_publish_state(base_speed_rpm, target_yaw_deg10,
-                                        false, true);
-        (void)app_tasks_set_wheel_speed_target(0, 0);
-        tb6612_stop();
-        uart0_sendStr("OK CLR\r\n");
-        return;
-    }
-
-    uart0_sendStr("ERR UNKNOWN_CMD\r\n");
-}
-
-static void uart_cmd_task(void *pvParameters)
-{
-    (void)pvParameters;
-    char line[96];
-    uint32_t index = 0;
-
-    uart_send_help();
-
-    for (;;) {
-        uint8_t byte;
-        if (!uart0_read_byte(&byte, 100)) {
-            continue;
-        }
-
-        if (byte == '\r' || byte == '\n') {
-            if (index > 0U) {
-                line[index] = '\0';
-                uart_handle_command(line);
-                index = 0;
-            }
-            continue;
-        }
-
-        if (index < (sizeof(line) - 1U)) {
-            line[index++] = (char)byte;
-        } else {
-            index = 0;
-            uart0_sendStr("ERR LINE_TOO_LONG\r\n");
-        }
-    }
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
- *  任务 8: 调试打印任务 (优先级 1, 栈 256)
- *  ───────────────────────────────────────────
- *  功能: 从 status_queue 读取速度闭环状态, 每 50ms 输出 RPM 到串口
- *  用途: 串口波形查看 (SerialPlot / VOFA+ 等工具)
- *  格式: "左轮RPM,右轮RPM\r\n"
- * ═══════════════════════════════════════════════════════════════════════════ */
-static void debug_print(void *pvParameters)
-{
-    (void)pvParameters;
-    char buf[256];
-
-    for (;;) {
-        speed_status_msg_t speed_status;
-        yaw_debug_status_t yaw_status = g_yaw_debug_status;
-
-        if (xQueuePeek(g_status_queue, &speed_status, 0) == pdPASS) {
-            snprintf(buf, sizeof(buf),
-                     "TEL seq=%lu t=%lu estop=%d en=%d att=%d base=%ld tgt=%ld yaw=%ld err=%ld turn=%ld lt=%ld rt=%ld l=%ld r=%ld kp=%ld ki=%ld kd=%ld\r\n",
-                     (unsigned long)yaw_status.seq,
-                     (unsigned long)yaw_status.t_ms,
-                     yaw_status.estop_latched ? 1 : 0,
-                     yaw_status.enabled ? 1 : 0,
-                     yaw_status.attitude_valid ? 1 : 0,
-                     (long)yaw_status.base_speed_rpm,
-                     (long)yaw_status.target_yaw_deg10,
-                     (long)yaw_status.current_yaw_deg10,
-                     (long)yaw_status.error_yaw_deg10,
-                     (long)yaw_status.turn_rpm,
-                     (long)yaw_status.left_cmd_rpm,
-                     (long)yaw_status.right_cmd_rpm,
-                     (long)speed_status.left_rpm,
-                     (long)speed_status.right_rpm,
-                     (long)yaw_status.kp_milli,
-                     (long)yaw_status.ki_milli,
-                     (long)yaw_status.kd_milli);
-            uart0_sendStr(buf);
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
@@ -1413,12 +1078,6 @@ void app_tasks_start(void)
 
     /* OLED 显示: 含 OLED 显存 (128×8=1024字节) + I2C 通信缓冲 */
     xTaskCreate(oled_task,       "OLED",     512, NULL, 1, NULL);
-
-    /* UART_CMD: 串口在线调参命令解析 */
-    xTaskCreate(uart_cmd_task,   "UART_CMD", 384, NULL, 1, NULL);
-
-    /* DEBUG: TEL 遥测输出, snprintf + uart0_sendStr, 避开 printf semihosting */
-    xTaskCreate(debug_print,     "DEBUG",    384, NULL, 1, NULL);
 
     /* ── 启动 FreeRTOS 调度器 ──
      * 此后 CPU 控制权交给调度器, 本函数不再返回

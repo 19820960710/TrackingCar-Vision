@@ -96,16 +96,6 @@ void uart0_sendStr(const char *str)
     uart0_txUnlock();
 }
 
-bool uart0_read_byte(uint8_t *byte, uint32_t timeout_ms)
-{
-    if (byte == NULL || xRxQueue == NULL) {
-        return false;
-    }
-
-    TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
-    return (xQueueReceive(xRxQueue, byte, timeout_ticks) == pdTRUE);
-}
-
 /**
  * @brief  libc write() 重定向: printf → UART0
  * @param  fd    文件描述符 (忽略)
