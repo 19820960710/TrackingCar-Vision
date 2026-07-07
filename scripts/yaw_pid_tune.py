@@ -257,6 +257,8 @@ def main():
     parser.add_argument("--deadband", type=int, default=15, help="yaw deadband deg10")
     parser.add_argument("--izone", type=int, default=300, help="integral zone deg10")
     parser.add_argument("--ilim", type=int, default=20, help="integral contribution limit rpm")
+    parser.add_argument("--zone", type=int, default=None, help="minimum speed compensation zone deg10")
+    parser.add_argument("--ramp", type=int, default=None, help="yaw target ramp step deg10 per 50ms")
     parser.add_argument("--hold", type=float, default=6.0, help="seconds per yaw target")
     parser.add_argument("--targets", default="0,450,900,1350,1800,0")
     parser.add_argument("--wait-att", type=float, default=45.0)
@@ -280,6 +282,8 @@ def main():
             f"DBY {args.deadband}",
             f"IZONEY {args.izone}",
             f"ILIMY {args.ilim}",
+            *( [f"ZONEY {args.zone}"] if args.zone is not None else [] ),
+            *( [f"RAMPY {args.ramp}"] if args.ramp is not None else [] ),
             f"BASE {args.base}",
             "START",
         ]

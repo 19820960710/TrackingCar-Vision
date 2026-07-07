@@ -154,11 +154,12 @@ static int32_t g_yaw_kp_milli = 80;   /* 第二轮调试默认值：降低 P，�
 static int32_t g_yaw_ki_milli = 1;    /* 小积分，仅在小误差区启用，减小静态误差 */
 static int32_t g_yaw_kd_milli = 60;   /* 增强阻尼，减少目标附近来回找正 */
 static int32_t g_yaw_out_limit_rpm = 160;
-static int32_t g_yaw_min_turn_rpm = 7;         /* 尾段静差破静摩擦补偿，仅目标斜坡完成后启用 */
-static int32_t g_yaw_deadband_deg10 = 18;      /* 1.8° 内认为到位，兼顾静差与近目标抖动 */
+static int32_t g_yaw_min_turn_rpm = 15;        /* 尾段最小转向速度补偿，仍走速度闭环 */
+static int32_t g_yaw_deadband_deg10 = 15;      /* 1.5° 内认为到位，兼顾静差与近目标抖动 */
 static int32_t g_yaw_integral_zone_deg10 = 180;/* 18° 内才积分，避免大角度 windup */
 static int32_t g_yaw_integral_limit_rpm = 6;   /* 积分项最大贡献 ±6RPM */
-static int32_t g_yaw_min_turn_zone_deg10 = 220;/* 只在小误差区启用静差补偿，避免大角度推过头 */
+static int32_t g_yaw_min_turn_zone_deg10 = 50; /* 只在 5° 内启用最小速度补偿，避免大动作刹车段推过头 */
+static int32_t g_yaw_target_ramp_step_deg10 = 80; /* 目标斜坡步长，单位 0.1°/50ms */
 static bool g_yaw_pid_config_dirty = false;
 static yaw_debug_status_t g_yaw_debug_status = {0};
 
@@ -555,10 +556,6 @@ static void YawKeySet_Task(void *pvParameters)
 #define YAW_PID_OUTPUT_LIMIT_RPM    160
 #define YAW_DYNAMIC_CAP_BASE_RPM    12
 #define YAW_DYNAMIC_CAP_ERR_DIV     25
-#define YAW_TARGET_RAMP_STEP_DEG10      80
-#define YAW_STATIC_BOOST_APPROACH_DEG10 4
-#define YAW_STATIC_BOOST_HOLD_COUNT     1U
-
 static int32_t yaw_target_ramp_step(int32_t current_deg10,
                                     int32_t target_deg10,
                                     int32_t step_deg10)
@@ -608,23 +605,16 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
     if (izone < deadband) izone = deadband;
     if (ilimit < 0) ilimit = -ilimit;
 
-    static uint32_t static_boost_count = 0;
-    static int32_t static_boost_sign = 0;
-
     if (abs_err <= deadband) {
-        static_boost_count = 0;
-        static_boost_sign = 0;
         pid_pos_reset(pid);
         return 0;
     }
 
     int32_t derr = 0;
-    int32_t prev_abs_err = abs_err;
     if (pid->first_run) {
         pid->first_run = 0U;
     } else {
         derr = err_deg10 - pid->last_err;
-        prev_abs_err = abs_i32(pid->last_err);
     }
     if (derr_out != NULL) {
         *derr_out = derr;
@@ -676,27 +666,13 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
     output = clamp_i32_local(output, -dynamic_limit, dynamic_limit);
 
     /*
-     * 静差破静摩擦补偿：目标斜坡完成后，只要小误差不再明显继续减小，
-     * 就立即给一个很小的爬行补偿；不再等待车体完全静止。
+     * 最小速度补偿：目标斜坡完成后，小误差修正不能低于 MINY。
+     * 这里补的是 yaw 输出 turn_rpm，也就是左右轮速度目标差；
+     * 不绕过速度环，不直接拍 PWM，因此编码器速度环仍然负责闭环约束。
      */
     int32_t err_sign = (err_deg10 > 0) ? 1 : -1;
-    bool error_still_approaching =
-        (abs_err + YAW_STATIC_BOOST_APPROACH_DEG10 < prev_abs_err);
     if (allow_static_boost && min_turn > 0 && abs_err > deadband &&
         abs_err <= g_yaw_min_turn_zone_deg10 &&
-        !error_still_approaching) {
-        if (static_boost_sign == err_sign) {
-            static_boost_count++;
-        } else {
-            static_boost_sign = err_sign;
-            static_boost_count = 1U;
-        }
-    } else {
-        static_boost_count = 0;
-        static_boost_sign = 0;
-    }
-
-    if (static_boost_count >= YAW_STATIC_BOOST_HOLD_COUNT &&
         abs_i32(output) < min_turn) {
         output = (err_sign > 0) ? min_turn : -min_turn;
         if (boost_active_out != NULL) {
@@ -824,7 +800,7 @@ static void yaw_loop_task(void *pvParameters)
                 control_target_yaw_deg10 = yaw_target_ramp_step(
                     control_target_yaw_deg10,
                     target.target_yaw_deg10,
-                    YAW_TARGET_RAMP_STEP_DEG10);
+                    g_yaw_target_ramp_step_deg10);
 
                 int32_t control_error_yaw_deg10 = normalize_angle_deg10(
                     control_target_yaw_deg10 - debug.current_yaw_deg10);
@@ -1203,6 +1179,7 @@ static void uart_send_help(void)
     uart0_sendStr("CMD YAW <deg> | YAW10 <deg10>\r\n");
     uart0_sendStr("CMD PIDY <kp_m> <ki_m> <kd_m> | OUTY <rpm>\r\n");
     uart0_sendStr("CMD MINY <rpm> | DBY <deg10> | IZONEY <deg10> | ILIMY <rpm>\r\n");
+    uart0_sendStr("CMD ZONEY <deg10> | RAMPY <deg10_per_50ms>\r\n");
     uart0_sendStr("CMD START | STOP | ESTOP | CLR | HELP\r\n");
 }
 
@@ -1363,6 +1340,33 @@ static void uart_handle_command(char *line)
             g_yaw_integral_zone_deg10 = value;
             taskEXIT_CRITICAL();
             uart0_sendStr("OK IZONEY\r\n");
+        }
+        return;
+    }
+
+    if (strcmp(cmd, "ZONEY") == 0) {
+        arg1 = strtok(NULL, " \t");
+        if (arg1 != NULL) {
+            int32_t value = (int32_t)strtol(arg1, NULL, 10);
+            if (value < 0) value = -value;
+            taskENTER_CRITICAL();
+            g_yaw_min_turn_zone_deg10 = value;
+            taskEXIT_CRITICAL();
+            uart0_sendStr("OK ZONEY\r\n");
+        }
+        return;
+    }
+
+    if (strcmp(cmd, "RAMPY") == 0) {
+        arg1 = strtok(NULL, " \t");
+        if (arg1 != NULL) {
+            int32_t value = (int32_t)strtol(arg1, NULL, 10);
+            if (value < 0) value = -value;
+            if (value == 0) value = 1;
+            taskENTER_CRITICAL();
+            g_yaw_target_ramp_step_deg10 = value;
+            taskEXIT_CRITICAL();
+            uart0_sendStr("OK RAMPY\r\n");
         }
         return;
     }
