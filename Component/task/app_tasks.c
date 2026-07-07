@@ -160,6 +160,7 @@ static int32_t g_yaw_integral_zone_deg10 = 180;/* 18° 内才积分，避免大�
 static int32_t g_yaw_integral_limit_rpm = 6;   /* 积分项最大贡献 ±6RPM */
 static int32_t g_yaw_min_turn_zone_deg10 = 180;/* 18° 内启用连续恢复速度曲线，避免中途停顿 */
 static int32_t g_yaw_target_ramp_step_deg10 = 80; /* 目标斜坡步长，单位 0.1°/50ms */
+static int32_t g_speed_start_ff_pwm = 0;       /* 低速启动前馈 PWM，调试命令 FFS 设置 */
 static bool g_yaw_pid_config_dirty = false;
 static yaw_debug_status_t g_yaw_debug_status = {0};
 
@@ -938,6 +939,34 @@ static void yaw_loop_task(void *pvParameters)
  * @brief 速度目标斜坡步进，每 50ms 最多变化 30RPM，降低换档/反向冲击
  */
 #define SPEED_RAMP_STEP_RPM         80
+#define SPEED_START_FF_SETPOINT_RPM 50
+#define SPEED_START_FF_MEASURED_RPM 2
+
+static int32_t speed_apply_start_feedforward(int32_t pwm,
+                                             int32_t setpoint_rpm,
+                                             int32_t measured_rpm)
+{
+    int32_t ff_pwm = g_speed_start_ff_pwm;
+    int32_t sign;
+
+    if (ff_pwm < 0) {
+        ff_pwm = -ff_pwm;
+    }
+    if (ff_pwm == 0 || setpoint_rpm == 0 ||
+        abs_i32(setpoint_rpm) > SPEED_START_FF_SETPOINT_RPM ||
+        abs_i32(measured_rpm) > SPEED_START_FF_MEASURED_RPM) {
+        return pwm;
+    }
+
+    sign = (setpoint_rpm > 0) ? 1 : -1;
+    if (pwm != 0 && ((pwm > 0 && sign < 0) || (pwm < 0 && sign > 0))) {
+        return pwm;
+    }
+    if (abs_i32(pwm) >= ff_pwm) {
+        return pwm;
+    }
+    return (sign > 0) ? ff_pwm : -ff_pwm;
+}
 
 static void speed_loop_task(void *pvParameters)
 {
@@ -1080,6 +1109,11 @@ static void speed_loop_task(void *pvParameters)
             status.right_pwm = pid_inc_compute(&right_pid,
                 status.right_setpoint_rpm, status.right_rpm);
 
+            status.left_pwm = speed_apply_start_feedforward(status.left_pwm,
+                status.left_setpoint_rpm, status.left_rpm);
+            status.right_pwm = speed_apply_start_feedforward(status.right_pwm,
+                status.right_setpoint_rpm, status.right_rpm);
+
             if (status.left_target_rpm == 0 && status.right_target_rpm == 0 &&
                 status.left_setpoint_rpm == 0 && status.right_setpoint_rpm == 0) {
                 /* 目标为零且斜坡已归零: 滑行停止 */
@@ -1208,7 +1242,7 @@ static void uart_send_help(void)
     uart0_sendStr("CMD YAW <deg> | YAW10 <deg10>\r\n");
     uart0_sendStr("CMD PIDY <kp_m> <ki_m> <kd_m> | OUTY <rpm>\r\n");
     uart0_sendStr("CMD MINY <rpm> | DBY <deg10> | IZONEY <deg10> | ILIMY <rpm>\r\n");
-    uart0_sendStr("CMD ZONEY <deg10> | RAMPY <deg10_per_50ms>\r\n");
+    uart0_sendStr("CMD ZONEY <deg10> | RAMPY <deg10_per_50ms> | FFS <pwm>\r\n");
     uart0_sendStr("CMD START | STOP | ESTOP | CLR | HELP\r\n");
 }
 
@@ -1396,6 +1430,19 @@ static void uart_handle_command(char *line)
             g_yaw_target_ramp_step_deg10 = value;
             taskEXIT_CRITICAL();
             uart0_sendStr("OK RAMPY\r\n");
+        }
+        return;
+    }
+
+    if (strcmp(cmd, "FFS") == 0) {
+        arg1 = strtok(NULL, " \t");
+        if (arg1 != NULL) {
+            int32_t value = (int32_t)strtol(arg1, NULL, 10);
+            if (value < 0) value = -value;
+            taskENTER_CRITICAL();
+            g_speed_start_ff_pwm = value;
+            taskEXIT_CRITICAL();
+            uart0_sendStr("OK FFS\r\n");
         }
         return;
     }
