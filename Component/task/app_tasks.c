@@ -1064,6 +1064,7 @@ static void oled_task(void *pvParameters)
  *  命令:
  *    BASE <rpm>      设置基准速度并使能 yaw 闭环
  *    SPD <rpm>       BASE 的别名，兼容旧调试习惯
+ *    WHEEL <l> <r>   关闭 yaw，直接测试左右轮速度内环
  *    YAW <deg>       设置期望 yaw 角，单位 °
  *    YAW10 <deg10>   设置期望 yaw 角，单位 0.1°
  *    PIDY <kp> <ki> <kd>  设置 yaw PID，参数为 milli 整数
@@ -1077,7 +1078,8 @@ static void oled_task(void *pvParameters)
 
 static void uart_send_help(void)
 {
-    uart0_sendStr("CMD BASE <rpm> | SPD <rpm> | YAW <deg> | YAW10 <deg10>\r\n");
+    uart0_sendStr("CMD BASE <rpm> | SPD <rpm> | WHEEL <l> <r>\r\n");
+    uart0_sendStr("CMD YAW <deg> | YAW10 <deg10>\r\n");
     uart0_sendStr("CMD PIDY <kp_m> <ki_m> <kd_m> | OUTY <rpm>\r\n");
     uart0_sendStr("CMD MINY <rpm> | DBY <deg10> | IZONEY <deg10> | ILIMY <rpm>\r\n");
     uart0_sendStr("CMD START | STOP | ESTOP | CLR | HELP\r\n");
@@ -1111,6 +1113,35 @@ static void uart_handle_command(char *line)
                 uart0_sendStr("OK BASE\r\n");
             } else {
                 uart0_sendStr("ERR ESTOP_OR_QUEUE\r\n");
+            }
+        }
+        return;
+    }
+
+    if (strcmp(cmd, "WHEEL") == 0 || strcmp(cmd, "WHL") == 0) {
+        arg1 = strtok(NULL, " \t");
+        arg2 = strtok(NULL, " \t");
+        if (arg1 != NULL && arg2 != NULL) {
+            bool estop_latched;
+            int32_t left_rpm = (int32_t)strtol(arg1, NULL, 10);
+            int32_t right_rpm = (int32_t)strtol(arg2, NULL, 10);
+
+            taskENTER_CRITICAL();
+            estop_latched = g_yaw_estop_latched;
+            taskEXIT_CRITICAL();
+
+            if (estop_latched) {
+                (void)app_tasks_set_wheel_speed_target(0, 0);
+                tb6612_stop();
+                uart0_sendStr("ERR ESTOP\r\n");
+            } else {
+                (void)yaw_control_publish_state(0, target_yaw_deg10,
+                                                false, true);
+                if (app_tasks_set_wheel_speed_target(left_rpm, right_rpm)) {
+                    uart0_sendStr("OK WHEEL\r\n");
+                } else {
+                    uart0_sendStr("ERR QUEUE\r\n");
+                }
             }
         }
         return;
@@ -1318,7 +1349,7 @@ static void uart_cmd_task(void *pvParameters)
 static void debug_print(void *pvParameters)
 {
     (void)pvParameters;
-    char buf[256];
+    char buf[320];
 
     for (;;) {
         speed_status_msg_t speed_status;
@@ -1326,7 +1357,7 @@ static void debug_print(void *pvParameters)
 
         if (xQueuePeek(g_status_queue, &speed_status, 0) == pdPASS) {
             snprintf(buf, sizeof(buf),
-                     "TEL seq=%lu t=%lu estop=%d en=%d att=%d base=%ld tgt=%ld yaw=%ld err=%ld turn=%ld lt=%ld rt=%ld l=%ld r=%ld kp=%ld ki=%ld kd=%ld\r\n",
+                     "TEL seq=%lu t=%lu estop=%d en=%d att=%d base=%ld tgt=%ld yaw=%ld err=%ld turn=%ld lt=%ld rt=%ld wl=%ld wr=%ld ls=%ld rs=%ld l=%ld r=%ld lp=%ld rp=%ld kp=%ld ki=%ld kd=%ld\r\n",
                      (unsigned long)yaw_status.seq,
                      (unsigned long)yaw_status.t_ms,
                      yaw_status.estop_latched ? 1 : 0,
@@ -1339,8 +1370,14 @@ static void debug_print(void *pvParameters)
                      (long)yaw_status.turn_rpm,
                      (long)yaw_status.left_cmd_rpm,
                      (long)yaw_status.right_cmd_rpm,
+                     (long)speed_status.left_target_rpm,
+                     (long)speed_status.right_target_rpm,
+                     (long)speed_status.left_setpoint_rpm,
+                     (long)speed_status.right_setpoint_rpm,
                      (long)speed_status.left_rpm,
                      (long)speed_status.right_rpm,
+                     (long)speed_status.left_pwm,
+                     (long)speed_status.right_pwm,
                      (long)yaw_status.kp_milli,
                      (long)yaw_status.ki_milli,
                      (long)yaw_status.kd_milli);
