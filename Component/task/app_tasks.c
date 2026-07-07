@@ -558,7 +558,7 @@ static void YawKeySet_Task(void *pvParameters)
 #define YAW_PID_OUTPUT_LIMIT_RPM    160
 #define YAW_DYNAMIC_CAP_BASE_RPM    12
 #define YAW_DYNAMIC_CAP_ERR_DIV     25
-#define YAW_RECOVER_MAX_TURN_RPM    30
+static int32_t g_yaw_recover_max_turn_rpm = 30; /* 连续恢复曲线最大转向速度，在线 RECY 调整 */
 
 static int32_t yaw_recover_turn_for_error(int32_t abs_err_deg10,
                                           int32_t deadband_deg10,
@@ -571,14 +571,15 @@ static int32_t yaw_recover_turn_for_error(int32_t abs_err_deg10,
     if (min_turn_rpm <= 0 || abs_err_deg10 <= deadband_deg10) {
         return 0;
     }
+    int32_t max_turn = g_yaw_recover_max_turn_rpm;
     if (zone_deg10 <= deadband_deg10 || abs_err_deg10 >= zone_deg10) {
-        return YAW_RECOVER_MAX_TURN_RPM;
+        return max_turn;
     }
 
     span = zone_deg10 - deadband_deg10;
     pos = abs_err_deg10 - deadband_deg10;
     return min_turn_rpm +
-        ((YAW_RECOVER_MAX_TURN_RPM - min_turn_rpm) * pos) / span;
+        ((max_turn - min_turn_rpm) * pos) / span;
 }
 
 static int32_t yaw_target_ramp_step(int32_t current_deg10,
@@ -1265,6 +1266,7 @@ static void uart_send_help(void)
     uart0_sendStr("CMD PIDY <kp_m> <ki_m> <kd_m> | OUTY <rpm>\r\n");
     uart0_sendStr("CMD MINY <rpm> | DBY <deg10> | IZONEY <deg10> | ILIMY <rpm>\r\n");
     uart0_sendStr("CMD ZONEY <deg10> | RAMPY <deg10_per_50ms> | FFS <pwm>\r\n");
+    uart0_sendStr("CMD RECY <rpm>\r\n");
     uart0_sendStr("CMD START | STOP | ESTOP | CLR | HELP\r\n");
 }
 
@@ -1452,6 +1454,19 @@ static void uart_handle_command(char *line)
             g_yaw_target_ramp_step_deg10 = value;
             taskEXIT_CRITICAL();
             uart0_sendStr("OK RAMPY\r\n");
+        }
+        return;
+    }
+
+    if (strcmp(cmd, "RECY") == 0) {
+        arg1 = strtok(NULL, " \t");
+        if (arg1 != NULL) {
+            int32_t value = (int32_t)strtol(arg1, NULL, 10);
+            if (value < 0) value = -value;
+            taskENTER_CRITICAL();
+            g_yaw_recover_max_turn_rpm = value;
+            taskEXIT_CRITICAL();
+            uart0_sendStr("OK RECY\r\n");
         }
         return;
     }
