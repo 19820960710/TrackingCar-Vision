@@ -160,7 +160,8 @@ static int32_t g_yaw_integral_zone_deg10 = 180;/* 18° 内才积分，避免大�
 static int32_t g_yaw_integral_limit_rpm = 6;   /* 积分项最大贡献 ±6RPM */
 static int32_t g_yaw_min_turn_zone_deg10 = 180;/* 18° 内启用连续恢复速度曲线，避免中途停顿 */
 static int32_t g_yaw_target_ramp_step_deg10 = 80; /* 目标斜坡步长，单位 0.1°/50ms */
-static int32_t g_speed_start_ff_pwm = 0;       /* 低速启动前馈 PWM，调试命令 FFS 设置 */
+static int32_t g_speed_start_ff_pwm = 14;      /* 低速启动前馈 PWM，由 yaw 层按误差开关 */
+static volatile bool g_speed_start_ff_enable = false; /* yaw 层根据误差开关低速前馈 */
 static bool g_yaw_pid_config_dirty = false;
 static yaw_debug_status_t g_yaw_debug_status = {0};
 
@@ -629,9 +630,20 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
     if (izone < deadband) izone = deadband;
     if (ilimit < 0) ilimit = -ilimit;
 
+    /* 软死区：误差落在 deadband 内不直接归零，而是线性衰减到一个很小的
+     * 保持转向速度，避免“刚到目标就瞬间失去修正力”导致的停顿。 */
     if (abs_err <= deadband) {
+        int32_t sign = (err_deg10 > 0) ? 1 : -1;
+        int32_t hold_turn = min_turn / 3;
+        if (hold_turn < 4) {
+            hold_turn = 4;
+        }
+        int32_t scaled = (abs_err * hold_turn) / (deadband > 0 ? deadband : 1);
         pid_pos_reset(pid);
-        return 0;
+        if (scaled < 3) {
+            return 0;
+        }
+        return (sign > 0) ? scaled : -scaled;
     }
 
     int32_t derr = 0;
@@ -800,6 +812,7 @@ static void yaw_loop_task(void *pvParameters)
                 debug.left_cmd_rpm = 0;
                 debug.right_cmd_rpm = 0;
                 control_target_initialized = false;
+                g_speed_start_ff_enable = false;
                 (void)app_tasks_set_wheel_speed_target(0, 0);
                 tb6612_stop();
             } else if (!target.enabled) {
@@ -808,6 +821,7 @@ static void yaw_loop_task(void *pvParameters)
                 debug.left_cmd_rpm = 0;
                 debug.right_cmd_rpm = 0;
                 control_target_initialized = false;
+                g_speed_start_ff_enable = false;
             } else if (xQueuePeek(g_attitude_queue, &attitude, 0) != pdPASS ||
                        attitude.status != 0) {
                 pid_pos_reset(&yaw_pid);
@@ -815,6 +829,7 @@ static void yaw_loop_task(void *pvParameters)
                 debug.left_cmd_rpm = 0;
                 debug.right_cmd_rpm = 0;
                 control_target_initialized = false;
+                g_speed_start_ff_enable = false;
                 (void)app_tasks_set_wheel_speed_target(0, 0);
             } else {
                 debug.attitude_valid = true;
@@ -847,6 +862,10 @@ static void yaw_loop_task(void *pvParameters)
                 debug.control_error_yaw_deg10 = control_error_yaw_deg10;
                 debug.error_delta_deg10 = control_error_delta_deg10;
                 debug.static_boost_active = static_boost_active ? 1 : 0;
+                /* 误差仍超过死区且需要转向修正时，才允许速度低速前馈；
+                 * 进入死区/到位后关闭，避免末端被 FFS 推一下造成抖动。 */
+                g_speed_start_ff_enable = (debug.turn_rpm != 0 &&
+                    abs_i32(debug.error_yaw_deg10) > g_yaw_deadband_deg10);
 
                 /* yaw PID 输出为差速修正量。若实测发现越修越偏，交换这里的正负号。 */
                 debug.left_cmd_rpm = target.base_speed_rpm - debug.turn_rpm;
@@ -939,8 +958,8 @@ static void yaw_loop_task(void *pvParameters)
  * @brief 速度目标斜坡步进，每 50ms 最多变化 30RPM，降低换档/反向冲击
  */
 #define SPEED_RAMP_STEP_RPM         80
-#define SPEED_START_FF_SETPOINT_RPM 50
-#define SPEED_START_FF_MEASURED_RPM 2
+#define SPEED_START_FF_SETPOINT_RPM 60
+#define SPEED_START_FF_ERR_RPM 2
 
 static int32_t speed_apply_start_feedforward(int32_t pwm,
                                              int32_t setpoint_rpm,
@@ -954,7 +973,10 @@ static int32_t speed_apply_start_feedforward(int32_t pwm,
     }
     if (ff_pwm == 0 || setpoint_rpm == 0 ||
         abs_i32(setpoint_rpm) > SPEED_START_FF_SETPOINT_RPM ||
-        abs_i32(measured_rpm) > SPEED_START_FF_MEASURED_RPM) {
+        abs_i32(setpoint_rpm - measured_rpm) <= SPEED_START_FF_ERR_RPM) {
+        return pwm;
+    }
+    if (!g_speed_start_ff_enable) {
         return pwm;
     }
 
