@@ -150,11 +150,11 @@ static int32_t g_yaw_kp_milli = 80;   /* 第二轮调试默认值：降低 P，�
 static int32_t g_yaw_ki_milli = 1;    /* 小积分，仅在小误差区启用，减小静态误差 */
 static int32_t g_yaw_kd_milli = 60;   /* 增强阻尼，减少目标附近来回找正 */
 static int32_t g_yaw_out_limit_rpm = 160;
-static int32_t g_yaw_min_turn_rpm = 0;         /* 第二轮调试关闭硬最小前馈，避免目标附近推过头 */
-static int32_t g_yaw_deadband_deg10 = 30;      /* 3.0° 死区，优先抑制近目标抖动 */
+static int32_t g_yaw_min_turn_rpm = 7;         /* 尾段静差破静摩擦补偿，仅目标斜坡完成后启用 */
+static int32_t g_yaw_deadband_deg10 = 18;      /* 1.8° 内认为到位，兼顾静差与近目标抖动 */
 static int32_t g_yaw_integral_zone_deg10 = 180;/* 18° 内才积分，避免大角度 windup */
 static int32_t g_yaw_integral_limit_rpm = 6;   /* 积分项最大贡献 ±6RPM */
-static int32_t g_yaw_min_turn_zone_deg10 = 250;/* 只在小误差区启用最小前馈，避免大角度推过头 */
+static int32_t g_yaw_min_turn_zone_deg10 = 220;/* 只在小误差区启用静差补偿，避免大角度推过头 */
 static bool g_yaw_pid_config_dirty = false;
 static yaw_debug_status_t g_yaw_debug_status = {0};
 
@@ -552,6 +552,8 @@ static void YawKeySet_Task(void *pvParameters)
 #define YAW_DYNAMIC_CAP_BASE_RPM    12
 #define YAW_DYNAMIC_CAP_ERR_DIV     25
 #define YAW_TARGET_RAMP_STEP_DEG10  80
+#define YAW_STATIC_BOOST_DERR_DEG10 12
+#define YAW_STATIC_BOOST_HOLD_COUNT 2U
 
 static int32_t yaw_target_ramp_step(int32_t current_deg10,
                                     int32_t target_deg10,
@@ -574,7 +576,9 @@ static int32_t yaw_target_ramp_step(int32_t current_deg10,
     return normalize_angle_deg10(current_deg10);
 }
 
-static int32_t yaw_pid_compute_turn(pid_pos_t *pid, int32_t err_deg10)
+static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
+                                    int32_t err_deg10,
+                                    bool allow_static_boost)
 {
     if (pid == NULL) {
         return 0;
@@ -591,7 +595,12 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid, int32_t err_deg10)
     if (izone < deadband) izone = deadband;
     if (ilimit < 0) ilimit = -ilimit;
 
+    static uint32_t static_boost_count = 0;
+    static int32_t static_boost_sign = 0;
+
     if (abs_err <= deadband) {
+        static_boost_count = 0;
+        static_boost_sign = 0;
         pid_pos_reset(pid);
         return 0;
     }
@@ -648,11 +657,28 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid, int32_t err_deg10)
     }
     output = clamp_i32_local(output, -dynamic_limit, dynamic_limit);
 
-    /* 小误差区如果 PID 输出过小，强制给最小转向前馈，解决静摩擦导致的静差。 */
-    if (min_turn > 0 && abs_err > deadband &&
+    /*
+     * 静差破静摩擦补偿：只在小误差、误差同向持续且变化率很低时触发。
+     * 这样阶跃快速过零时不会立刻加前馈推过头；扰动后的稳态误差也不用等积分慢慢攒输出。
+     */
+    int32_t err_sign = (err_deg10 > 0) ? 1 : -1;
+    if (allow_static_boost && min_turn > 0 && abs_err > deadband &&
         abs_err <= g_yaw_min_turn_zone_deg10 &&
+        abs_i32(derr) <= YAW_STATIC_BOOST_DERR_DEG10) {
+        if (static_boost_sign == err_sign) {
+            static_boost_count++;
+        } else {
+            static_boost_sign = err_sign;
+            static_boost_count = 1U;
+        }
+    } else {
+        static_boost_count = 0;
+        static_boost_sign = 0;
+    }
+
+    if (static_boost_count >= YAW_STATIC_BOOST_HOLD_COUNT &&
         abs_i32(output) < min_turn) {
-        output = (err_deg10 > 0) ? min_turn : -min_turn;
+        output = (err_sign > 0) ? min_turn : -min_turn;
     }
 
     output = clamp_i32_local(output, pid->out_min, pid->out_max);
@@ -775,8 +801,11 @@ static void yaw_loop_task(void *pvParameters)
 
                 int32_t control_error_yaw_deg10 = normalize_angle_deg10(
                     control_target_yaw_deg10 - debug.current_yaw_deg10);
+                bool allow_static_boost = (control_target_yaw_deg10 ==
+                                           target.target_yaw_deg10);
                 debug.turn_rpm = yaw_pid_compute_turn(&yaw_pid,
-                                                       control_error_yaw_deg10);
+                                                       control_error_yaw_deg10,
+                                                       allow_static_boost);
 
                 /* yaw PID 输出为差速修正量。若实测发现越修越偏，交换这里的正负号。 */
                 debug.left_cmd_rpm = target.base_speed_rpm - debug.turn_rpm;
