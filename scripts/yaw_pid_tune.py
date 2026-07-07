@@ -181,6 +181,19 @@ def analyze_yaw_segment(name: str, records: list[dict], target_deg10: int, out_l
         sat_ratio = sum(1 for v in turn_values if abs(v) >= int(out_limit * 0.95)) / len(turn_values)
     tail_std = pstdev(err_tail) / 10.0 if len(err_tail) >= 2 else 0.0
     crossings = zero_crossings(err_values)
+    ramp_done_ms = None
+    first_boost_ms = None
+    boost_count = sum(1 for r in active if r.get("boost", 0) != 0)
+    if any("ct" in r for r in active):
+        ramp_done_ms = next(
+            (r.get("t", 0) - t0 for r in active if r.get("ct") == target_deg10),
+            None,
+        )
+    if boost_count:
+        first_boost_ms = next(
+            (r.get("t", 0) - t0 for r in active if r.get("boost", 0) != 0),
+            None,
+        )
 
     result = {
         "name": name,
@@ -196,6 +209,9 @@ def analyze_yaw_segment(name: str, records: list[dict], target_deg10: int, out_l
         "max_abs_turn_rpm": max_abs_turn,
         "sat_ratio": sat_ratio,
         "zero_crossings": crossings,
+        "ramp_done_ms": ramp_done_ms,
+        "first_boost_ms": first_boost_ms,
+        "boost_count": boost_count,
         "n": len(active),
     }
 
@@ -204,6 +220,7 @@ def analyze_yaw_segment(name: str, records: list[dict], target_deg10: int, out_l
         "final_err={final_err_deg:.1f}deg tail_std={tail_std_deg:.2f}deg "
         "overshoot={overshoot_deg:.1f}deg t90_ms={t90_ms} "
         "settle2_ms={settle_2deg_ms} settle5_ms={settle_5deg_ms} "
+        "ramp_done_ms={ramp_done_ms} first_boost_ms={first_boost_ms} boosts={boost_count} "
         "max_turn={max_abs_turn_rpm} sat={sat_ratio:.0%} zero_cross={zero_crossings} n={n}".format(**result)
     )
     return result

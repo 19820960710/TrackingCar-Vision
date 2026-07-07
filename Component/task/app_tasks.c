@@ -107,6 +107,10 @@ typedef struct {
     int32_t current_yaw_deg10;
     int32_t error_yaw_deg10;
     int32_t turn_rpm;
+    int32_t control_target_yaw_deg10;
+    int32_t control_error_yaw_deg10;
+    int32_t error_delta_deg10;
+    int32_t static_boost_active;
     int32_t left_cmd_rpm;
     int32_t right_cmd_rpm;
     int32_t kp_milli;
@@ -551,9 +555,9 @@ static void YawKeySet_Task(void *pvParameters)
 #define YAW_PID_OUTPUT_LIMIT_RPM    160
 #define YAW_DYNAMIC_CAP_BASE_RPM    12
 #define YAW_DYNAMIC_CAP_ERR_DIV     25
-#define YAW_TARGET_RAMP_STEP_DEG10  80
-#define YAW_STATIC_BOOST_DERR_DEG10 12
-#define YAW_STATIC_BOOST_HOLD_COUNT 2U
+#define YAW_TARGET_RAMP_STEP_DEG10      80
+#define YAW_STATIC_BOOST_APPROACH_DEG10 4
+#define YAW_STATIC_BOOST_HOLD_COUNT     1U
 
 static int32_t yaw_target_ramp_step(int32_t current_deg10,
                                     int32_t target_deg10,
@@ -578,8 +582,17 @@ static int32_t yaw_target_ramp_step(int32_t current_deg10,
 
 static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
                                     int32_t err_deg10,
-                                    bool allow_static_boost)
+                                    bool allow_static_boost,
+                                    int32_t *derr_out,
+                                    bool *boost_active_out)
 {
+    if (derr_out != NULL) {
+        *derr_out = 0;
+    }
+    if (boost_active_out != NULL) {
+        *boost_active_out = false;
+    }
+
     if (pid == NULL) {
         return 0;
     }
@@ -606,10 +619,15 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
     }
 
     int32_t derr = 0;
+    int32_t prev_abs_err = abs_err;
     if (pid->first_run) {
         pid->first_run = 0U;
     } else {
         derr = err_deg10 - pid->last_err;
+        prev_abs_err = abs_i32(pid->last_err);
+    }
+    if (derr_out != NULL) {
+        *derr_out = derr;
     }
 
     if (abs_err <= izone && pid->ki_milli != 0) {
@@ -658,13 +676,15 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
     output = clamp_i32_local(output, -dynamic_limit, dynamic_limit);
 
     /*
-     * 静差破静摩擦补偿：只在小误差、误差同向持续且变化率很低时触发。
-     * 这样阶跃快速过零时不会立刻加前馈推过头；扰动后的稳态误差也不用等积分慢慢攒输出。
+     * 静差破静摩擦补偿：目标斜坡完成后，只要小误差不再明显继续减小，
+     * 就立即给一个很小的爬行补偿；不再等待车体完全静止。
      */
     int32_t err_sign = (err_deg10 > 0) ? 1 : -1;
+    bool error_still_approaching =
+        (abs_err + YAW_STATIC_BOOST_APPROACH_DEG10 < prev_abs_err);
     if (allow_static_boost && min_turn > 0 && abs_err > deadband &&
         abs_err <= g_yaw_min_turn_zone_deg10 &&
-        abs_i32(derr) <= YAW_STATIC_BOOST_DERR_DEG10) {
+        !error_still_approaching) {
         if (static_boost_sign == err_sign) {
             static_boost_count++;
         } else {
@@ -679,6 +699,9 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
     if (static_boost_count >= YAW_STATIC_BOOST_HOLD_COUNT &&
         abs_i32(output) < min_turn) {
         output = (err_sign > 0) ? min_turn : -min_turn;
+        if (boost_active_out != NULL) {
+            *boost_active_out = true;
+        }
     }
 
     output = clamp_i32_local(output, pid->out_min, pid->out_max);
@@ -760,6 +783,10 @@ static void yaw_loop_task(void *pvParameters)
             debug.enabled = g_yaw_enabled;
             debug.estop_latched = g_yaw_estop_latched;
             debug.attitude_valid = false;
+            debug.control_target_yaw_deg10 = 0;
+            debug.control_error_yaw_deg10 = 0;
+            debug.error_delta_deg10 = 0;
+            debug.static_boost_active = 0;
 
             if (g_yaw_estop_latched) {
                 pid_pos_reset(&yaw_pid);
@@ -803,9 +830,17 @@ static void yaw_loop_task(void *pvParameters)
                     control_target_yaw_deg10 - debug.current_yaw_deg10);
                 bool allow_static_boost = (control_target_yaw_deg10 ==
                                            target.target_yaw_deg10);
+                int32_t control_error_delta_deg10 = 0;
+                bool static_boost_active = false;
                 debug.turn_rpm = yaw_pid_compute_turn(&yaw_pid,
                                                        control_error_yaw_deg10,
-                                                       allow_static_boost);
+                                                       allow_static_boost,
+                                                       &control_error_delta_deg10,
+                                                       &static_boost_active);
+                debug.control_target_yaw_deg10 = control_target_yaw_deg10;
+                debug.control_error_yaw_deg10 = control_error_yaw_deg10;
+                debug.error_delta_deg10 = control_error_delta_deg10;
+                debug.static_boost_active = static_boost_active ? 1 : 0;
 
                 /* yaw PID 输出为差速修正量。若实测发现越修越偏，交换这里的正负号。 */
                 debug.left_cmd_rpm = target.base_speed_rpm - debug.turn_rpm;
@@ -1435,7 +1470,7 @@ static void uart_cmd_task(void *pvParameters)
 static void debug_print(void *pvParameters)
 {
     (void)pvParameters;
-    char buf[320];
+    char buf[448];
 
     for (;;) {
         speed_status_msg_t speed_status;
@@ -1443,7 +1478,7 @@ static void debug_print(void *pvParameters)
 
         if (xQueuePeek(g_status_queue, &speed_status, 0) == pdPASS) {
             snprintf(buf, sizeof(buf),
-                     "TEL seq=%lu t=%lu estop=%d en=%d att=%d base=%ld tgt=%ld yaw=%ld err=%ld turn=%ld lt=%ld rt=%ld wl=%ld wr=%ld ls=%ld rs=%ld l=%ld r=%ld lp=%ld rp=%ld kp=%ld ki=%ld kd=%ld\r\n",
+                     "TEL seq=%lu t=%lu estop=%d en=%d att=%d base=%ld tgt=%ld yaw=%ld err=%ld ct=%ld ce=%ld derr=%ld boost=%ld turn=%ld lt=%ld rt=%ld wl=%ld wr=%ld ls=%ld rs=%ld l=%ld r=%ld lp=%ld rp=%ld kp=%ld ki=%ld kd=%ld\r\n",
                      (unsigned long)yaw_status.seq,
                      (unsigned long)yaw_status.t_ms,
                      yaw_status.estop_latched ? 1 : 0,
@@ -1453,6 +1488,10 @@ static void debug_print(void *pvParameters)
                      (long)yaw_status.target_yaw_deg10,
                      (long)yaw_status.current_yaw_deg10,
                      (long)yaw_status.error_yaw_deg10,
+                     (long)yaw_status.control_target_yaw_deg10,
+                     (long)yaw_status.control_error_yaw_deg10,
+                     (long)yaw_status.error_delta_deg10,
+                     (long)yaw_status.static_boost_active,
                      (long)yaw_status.turn_rpm,
                      (long)yaw_status.left_cmd_rpm,
                      (long)yaw_status.right_cmd_rpm,
