@@ -51,6 +51,22 @@ typedef struct {
 } pid_inc_t;
 
 /**
+ * @brief 位置式 PID 控制器结构体
+ * @note  用于 yaw/循线等位置量闭环，输入通常是“误差”，输出为转向差速量。
+ */
+typedef struct {
+    int32_t kp_milli;          /**< 比例系数 × 1000 */
+    int32_t ki_milli;          /**< 积分系数 × 1000 */
+    int32_t kd_milli;          /**< 微分系数 × 1000 */
+    int32_t out_min;           /**< 输出下限 */
+    int32_t out_max;           /**< 输出上限 */
+    int32_t output;            /**< 当前输出值 (限幅后) */
+    int32_t integral_milli;    /**< 积分累计项 × 1000 */
+    int32_t last_err;          /**< 上周期误差 */
+    uint8_t first_run;         /**< 首次运行标记，避免 D 项突变 */
+} pid_pos_t;
+
+/**
  * @brief  初始化增量式 PID 控制器并复位状态
  * @param  pid       控制器指针
  * @param  kp_milli  比例系数 × 1000 (如 80 = 0.080)
@@ -101,5 +117,40 @@ int32_t pid_inc_compute(pid_inc_t *pid, int32_t target, int32_t measured);
  * @return 当前输出值
  */
 int32_t pid_inc_get_output(const pid_inc_t *pid);
+
+/**
+ * @brief  初始化位置式 PID 控制器并复位状态
+ */
+void pid_pos_init(pid_pos_t *pid, int32_t kp_milli, int32_t ki_milli,
+                  int32_t kd_milli, int32_t out_min, int32_t out_max);
+
+/**
+ * @brief  在线调整位置式 PID 系数
+ */
+void pid_pos_set_gain(pid_pos_t *pid, int32_t kp_milli, int32_t ki_milli,
+                      int32_t kd_milli);
+
+/**
+ * @brief  在线调整位置式 PID 输出限幅并约束当前输出
+ */
+void pid_pos_set_output_limit(pid_pos_t *pid, int32_t out_min, int32_t out_max);
+
+/**
+ * @brief  复位位置式 PID 控制器
+ */
+void pid_pos_reset(pid_pos_t *pid);
+
+/**
+ * @brief  按误差执行一次位置式 PID 计算
+ * @param  pid  控制器指针
+ * @param  err  当前误差，例如 yaw_error_deg10
+ * @return 限幅后的输出值
+ */
+int32_t pid_pos_compute_error(pid_pos_t *pid, int32_t err);
+
+/**
+ * @brief  获取位置式 PID 当前输出值
+ */
+int32_t pid_pos_get_output(const pid_pos_t *pid);
 
 #endif /* PID_H */
