@@ -25,3 +25,8 @@ __pycache__/
 
 # Pi 本地配置/技能缓存
 .pi/
+
+# Windows 保留设备名（防止误生成）
+nul
+con
+prn

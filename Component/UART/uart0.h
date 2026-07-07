@@ -21,7 +21,6 @@
 #define UART0_H
 
 #include <stdint.h>
-#include <stdbool.h>
 
 /**
  * @brief  初始化 UART0 调试串口
@@ -35,15 +34,6 @@ void uart0_init(void);
  * @param  str  NULL 结尾的 ASCII 字符串
  */
 void uart0_sendStr(const char *str);
-
-/**
- * @brief  从 UART0 RX 队列读取 1 字节
- * @param  byte        输出字节指针
- * @param  timeout_ms  等待超时，单位 ms
- * @return true=读取成功，false=超时或队列未初始化
- * @note   供串口命令解析任务使用；不要同时创建 echo 接收任务消费同一个队列。
- */
-bool uart0_read_byte(uint8_t *byte, uint32_t timeout_ms);
 
 /**
  * @brief  UART0 发送任务入口 (心跳 + 堆监控)
