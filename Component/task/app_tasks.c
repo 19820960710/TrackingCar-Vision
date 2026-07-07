@@ -50,11 +50,13 @@
 #include "pid/pid.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include "UART/uart0.h"
+#include "stdio.h"
+
+
 /* ═══════════════════════════════════════════════════════════════════════════
  *  数据结构定义
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-/**
+ * ════════════╛
  * @brief MPU6050 姿态消息（通过 attitude_queue 传递）
  * @note  pitch10/roll10/yaw10 单位为 0.1°（放大 10 倍避免浮点传输）
  *        status == 0 表示数据有效，非 0 表示初始化失败
@@ -1016,6 +1018,24 @@ static void oled_task(void *pvParameters)
     }
 }
 
+
+static void debug_print(void *pvParameters)
+{
+    (void)pvParameters;
+    char buf[128];
+
+    for (;;) {
+        attitude_msg_t new_status;
+
+        if (xQueuePeek(g_attitude_queue, &new_status, 0) == pdPASS) {
+            snprintf(buf, sizeof(buf), "%.2f\r\n",
+                     (float)new_status.yaw);
+            uart0_sendStr(buf);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
 /* ═══════════════════════════════════════════════════════════════════════════
  *  调度器启动函数
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -1078,6 +1098,8 @@ void app_tasks_start(void)
 
     /* OLED 显示: 含 OLED 显存 (128×8=1024字节) + I2C 通信缓冲 */
     xTaskCreate(oled_task,       "OLED",     512, NULL, 1, NULL);
+
+    xTaskCreate(debug_print,      "DEBUG",    256, NULL, 1, NULL);
 
     /* ── 启动 FreeRTOS 调度器 ──
      * 此后 CPU 控制权交给调度器, 本函数不再返回
