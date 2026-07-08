@@ -521,18 +521,20 @@ static void YawKeySet_Task(void *pvParameters)
 #define YAW_LOOP_PERIOD_MS          50
 #define YAW_LOOP_DIVIDER            (YAW_LOOP_PERIOD_MS / YAW_LOOP_TIMER_TICK_MS)
 #define YAW_PID_DEFAULT_KP_MILLI    120
-#define YAW_PID_DEFAULT_KI_MILLI    8
-#define YAW_PID_DEFAULT_KD_MILLI    100
+#define YAW_PID_DEFAULT_KI_MILLI    3
+#define YAW_PID_DEFAULT_KD_MILLI    170
 #define YAW_PID_OUTPUT_LIMIT_RPM    200
 #define YAW_DYNAMIC_CAP_BASE_RPM    18
 #define YAW_DYNAMIC_CAP_ERR_DIV     14
-#define YAW_MIN_TURN_RPM            4    /* 死区外最小修正速度，只用于打破尾段静摩擦 */
-#define YAW_DEADBAND_DEG10          10    /* 1.0° 内认为到位，避免 1.5° 死区导致小误差等待数秒 */
-#define YAW_INTEGRAL_ZONE_DEG10     180  /* 18° 内才积分，避免大角度 windup */
-#define YAW_INTEGRAL_LIMIT_RPM      4    /* 积分项最大贡献 ±4RPM，减少尾段残留 */
+#define YAW_MIN_TURN_RPM            7    /* 死区外给一次明确修正，避免 4RPM 小碎步 */
+#define YAW_DEADBAND_DEG10          12   /* 1.2° 内认为到位，配合短接制动抑制末端碎步 */
+#define YAW_INTEGRAL_ZONE_DEG10     120  /* 12° 内才积分，避免扰动回正中途积累过多 */
+#define YAW_INTEGRAL_LIMIT_RPM      2    /* 积分项最大贡献 ±2RPM，尾段主要靠前馈而不是慢积分 */
 #define YAW_MIN_TURN_ZONE_DEG10     180  /* 18° 内启用连续恢复速度曲线，避免中途停顿 */
 #define YAW_TARGET_RAMP_STEP_DEG10  150  /* 目标斜坡步长，单位 0.1°/50ms，45°约 150ms 完成 */
-#define YAW_RECOVER_MAX_TURN_RPM    20   /* 小误差恢复曲线最大转向速度，低于大误差动态限幅 */
+#define YAW_RECOVER_MAX_TURN_RPM    15   /* 小误差恢复曲线最大转向速度，低于大误差动态限幅 */
+#define YAW_APPROACH_BRAKE_ZONE_DEG10 120 /* 12° 内若误差正在快速变小，则提前清零并短接制动 */
+#define YAW_APPROACH_DERR_DEG10     2    /* 0.2°/50ms 以上认为正在明显靠近目标 */
 #define SPEED_START_FF_PWM          15   /* 速度环低速最小 PWM，由 yaw 层按误差开关 */
 
 static int32_t yaw_recover_turn_for_error(int32_t abs_err_deg10,
@@ -624,6 +626,11 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
         *derr_out = derr;
     }
 
+    bool approaching_target =
+        ((err_deg10 > 0 && derr < 0) || (err_deg10 < 0 && derr > 0));
+    bool approaching_fast = approaching_target &&
+        (abs_i32(derr) >= YAW_APPROACH_DERR_DEG10);
+
     if (abs_err <= izone && pid->ki_milli != 0) {
         int64_t next_integral = (int64_t)pid->integral_milli +
                                 (int64_t)pid->ki_milli * err_deg10;
@@ -637,6 +644,10 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
         }
     } else {
         /* 大角度时快速泄放积分，防止切换大目标后 windup 残留。 */
+        pid->integral_milli /= 2;
+    }
+    if (approaching_fast && abs_err <= YAW_APPROACH_BRAKE_ZONE_DEG10) {
+        /* 扰动回正接近目标时，提前泄放积分，避免积分残留把车推过头。 */
         pid->integral_milli /= 2;
     }
 
@@ -669,12 +680,18 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
     }
     output = clamp_i32_local(output, -dynamic_limit, dynamic_limit);
 
+    int32_t err_sign = (err_deg10 > 0) ? 1 : -1;
+    if (approaching_fast && abs_err <= YAW_APPROACH_BRAKE_ZONE_DEG10) {
+        /* 接近目标且误差正在快速变小时，不再反向打一脚，直接让速度目标归零。
+         * speed_loop 对零目标会短接制动；这样比反向 turn 更不容易冲过头，也不会末端小碎步。 */
+        output = 0;
+    }
+
     /*
      * 最小速度补偿：目标斜坡完成后，小误差修正不能低于 MINY。
      * 这里补的是 yaw 输出 turn_rpm，也就是左右轮速度目标差；
      * 不绕过速度环，不直接拍 PWM，因此编码器速度环仍然负责闭环约束。
      */
-    int32_t err_sign = (err_deg10 > 0) ? 1 : -1;
     int32_t recover_turn = yaw_recover_turn_for_error(abs_err,
                                                        deadband,
                                                        YAW_MIN_TURN_ZONE_DEG10,
@@ -683,6 +700,7 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
         ((output > 0 && err_sign > 0) || (output < 0 && err_sign < 0));
     if (allow_static_boost && recover_turn > 0 &&
         abs_err <= YAW_MIN_TURN_ZONE_DEG10 &&
+        !(approaching_fast && abs_err <= YAW_APPROACH_BRAKE_ZONE_DEG10) &&
         output_same_direction && abs_i32(output) < recover_turn) {
         output = (err_sign > 0) ? recover_turn : -recover_turn;
         if (boost_active_out != NULL) {
@@ -778,15 +796,22 @@ static void yaw_loop_task(void *pvParameters)
                     control_target_yaw_deg10 - status.current_yaw_deg10);
                 bool allow_static_boost = (control_target_yaw_deg10 ==
                                            target.target_yaw_deg10);
+                int32_t yaw_derr_deg10 = 0;
                 status.turn_rpm = yaw_pid_compute_turn(&yaw_pid,
                                                        control_error_yaw_deg10,
                                                        allow_static_boost,
-                                                       NULL,
+                                                       &yaw_derr_deg10,
                                                        NULL);
+                bool yaw_approaching_close =
+                    ((control_error_yaw_deg10 > 0 && yaw_derr_deg10 < 0) ||
+                     (control_error_yaw_deg10 < 0 && yaw_derr_deg10 > 0)) &&
+                    abs_i32(control_error_yaw_deg10) <= YAW_APPROACH_BRAKE_ZONE_DEG10 &&
+                    abs_i32(yaw_derr_deg10) >= YAW_APPROACH_DERR_DEG10;
                 /* 误差仍超过死区且需要转向修正时，才允许速度低速前馈；
-                 * 进入死区/到位后关闭，避免末端被 FFS 推一下造成抖动。 */
+                 * 接近目标且误差快速变小时关闭 FFS，避免扰动回正后冲过头。 */
                 g_speed_start_ff_enable = (status.turn_rpm != 0 &&
-                    abs_i32(status.error_yaw_deg10) > YAW_DEADBAND_DEG10);
+                    abs_i32(status.error_yaw_deg10) > YAW_DEADBAND_DEG10 &&
+                    !yaw_approaching_close);
 
                 /* yaw PID 输出为差速修正量。若实测发现越修越偏，交换这里的正负号。 */
                 status.left_cmd_rpm = target.base_speed_rpm - status.turn_rpm;
@@ -1004,7 +1029,7 @@ static void speed_loop_task(void *pvParameters)
                 pid_inc_reset(&right_pid);
                 status.left_pwm  = 0;
                 status.right_pwm = 0;
-                tb6612_stop();
+                tb6612_brake();
             }
         }
 
@@ -1075,8 +1100,8 @@ static void speed_loop_task(void *pvParameters)
 
             if (status.left_target_rpm == 0 && status.right_target_rpm == 0 &&
                 status.left_setpoint_rpm == 0 && status.right_setpoint_rpm == 0) {
-                /* 目标为零且斜坡已归零: 滑行停止 */
-                tb6612_stop();
+                /* 目标为零且斜坡已归零: 短接制动，减少扰动回正后靠惯性冲过头 */
+                tb6612_brake();
                 status.left_pwm  = 0;
                 status.right_pwm = 0;
                 pid_inc_reset(&left_pid);
