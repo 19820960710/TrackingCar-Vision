@@ -520,20 +520,20 @@ static void YawKeySet_Task(void *pvParameters)
 #define YAW_LOOP_TIMER_TICK_MS     10
 #define YAW_LOOP_PERIOD_MS          50
 #define YAW_LOOP_DIVIDER            (YAW_LOOP_PERIOD_MS / YAW_LOOP_TIMER_TICK_MS)
-#define YAW_PID_DEFAULT_KP_MILLI    95
-#define YAW_PID_DEFAULT_KI_MILLI    1
-#define YAW_PID_DEFAULT_KD_MILLI    90
+#define YAW_PID_DEFAULT_KP_MILLI    120
+#define YAW_PID_DEFAULT_KI_MILLI    8
+#define YAW_PID_DEFAULT_KD_MILLI    100
 #define YAW_PID_OUTPUT_LIMIT_RPM    200
-#define YAW_DYNAMIC_CAP_BASE_RPM    22
-#define YAW_DYNAMIC_CAP_ERR_DIV     12
-#define YAW_MIN_TURN_RPM            0    /* 不再用 yaw 最小速度顶尾段，静摩擦交给速度环最小 PWM */
-#define YAW_DEADBAND_DEG10          15   /* 1.5° 内认为到位，兼顾静差与近目标抖动 */
+#define YAW_DYNAMIC_CAP_BASE_RPM    18
+#define YAW_DYNAMIC_CAP_ERR_DIV     14
+#define YAW_MIN_TURN_RPM            4    /* 死区外最小修正速度，只用于打破尾段静摩擦 */
+#define YAW_DEADBAND_DEG10          10    /* 1.0° 内认为到位，避免 1.5° 死区导致小误差等待数秒 */
 #define YAW_INTEGRAL_ZONE_DEG10     180  /* 18° 内才积分，避免大角度 windup */
-#define YAW_INTEGRAL_LIMIT_RPM      5    /* 积分项最大贡献 ±5RPM，减少尾段残留 */
-#define YAW_MIN_TURN_ZONE_DEG10     180  /* 保留恢复曲线接口；默认 min_turn=0 时不强制最小速度 */
+#define YAW_INTEGRAL_LIMIT_RPM      4    /* 积分项最大贡献 ±4RPM，减少尾段残留 */
+#define YAW_MIN_TURN_ZONE_DEG10     180  /* 18° 内启用连续恢复速度曲线，避免中途停顿 */
 #define YAW_TARGET_RAMP_STEP_DEG10  150  /* 目标斜坡步长，单位 0.1°/50ms，45°约 150ms 完成 */
-#define YAW_RECOVER_MAX_TURN_RPM    0    /* 默认关闭 yaw 最小速度恢复，由速度环前馈克服静摩擦 */
-#define SPEED_START_FF_PWM          16   /* 速度环低速最小 PWM，由 yaw 层按误差开关 */
+#define YAW_RECOVER_MAX_TURN_RPM    20   /* 小误差恢复曲线最大转向速度，低于大误差动态限幅 */
+#define SPEED_START_FF_PWM          15   /* 速度环低速最小 PWM，由 yaw 层按误差开关 */
 
 static int32_t yaw_recover_turn_for_error(int32_t abs_err_deg10,
                                           int32_t deadband_deg10,
@@ -606,9 +606,9 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
     if (izone < deadband) izone = deadband;
     if (ilimit < 0) ilimit = -ilimit;
 
-    /* 到位死区：不再在 yaw 层给最小速度。
-     * 旧方案会在目标附近持续给 3~5RPM，小车靠速度环积分慢慢爬 PWM，
-     * 容易出现末端拖尾和过冲；现在进死区直接清零，静摩擦补偿只放在速度环。 */
+    /* 到位死区：0.8° 内直接清零并复位 PID。
+     * 超过死区后再给 4RPM 起步修正，并由速度环渐进最小 PWM 推动，
+     * 避免原来 1.5° 死区内要等积分爬几秒才动作。 */
     if (abs_err <= deadband) {
         pid_pos_reset(pid);
         return 0;
@@ -880,7 +880,10 @@ static void yaw_loop_task(void *pvParameters)
  */
 #define SPEED_RAMP_STEP_RPM         100
 #define SPEED_START_FF_SETPOINT_RPM 90
-#define SPEED_START_FF_ERR_RPM 1
+#define SPEED_START_FF_ERR_RPM 2
+#define SPEED_START_FF_MIN_SETPOINT_RPM 4
+#define SPEED_START_FF_FULL_SETPOINT_RPM 24
+#define SPEED_START_FF_MIN_PWM 12
 
 static int32_t speed_apply_start_feedforward(int32_t pwm,
                                              int32_t setpoint_rpm,
@@ -892,13 +895,26 @@ static int32_t speed_apply_start_feedforward(int32_t pwm,
     if (ff_pwm < 0) {
         ff_pwm = -ff_pwm;
     }
+
+    int32_t abs_setpoint = abs_i32(setpoint_rpm);
     if (ff_pwm == 0 || setpoint_rpm == 0 ||
-        abs_i32(setpoint_rpm) > SPEED_START_FF_SETPOINT_RPM ||
+        abs_setpoint > SPEED_START_FF_SETPOINT_RPM ||
+        abs_setpoint < SPEED_START_FF_MIN_SETPOINT_RPM ||
         abs_i32(setpoint_rpm - measured_rpm) <= SPEED_START_FF_ERR_RPM) {
         return pwm;
     }
     if (!g_speed_start_ff_enable) {
         return pwm;
+    }
+
+    /* 小 turn 命令不要直接打满最小 PWM，否则目标附近会“顶一下-停一下”。
+     * 随 setpoint 逐步抬高前馈：很小的尾段修正更柔，大于约 24RPM 才给满 FFS。 */
+    if (abs_setpoint < SPEED_START_FF_FULL_SETPOINT_RPM) {
+        int32_t ff_span = ff_pwm - SPEED_START_FF_MIN_PWM;
+        if (ff_span > 0) {
+            ff_pwm = SPEED_START_FF_MIN_PWM +
+                (ff_span * abs_setpoint) / SPEED_START_FF_FULL_SETPOINT_RPM;
+        }
     }
 
     sign = (setpoint_rpm > 0) ? 1 : -1;
