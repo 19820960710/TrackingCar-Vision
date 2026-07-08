@@ -445,11 +445,10 @@ int MPU6050_Init(void)
     /* ── 寄存器配置 ── */
     MPU6050_Register_init();
 
-    /* ── 校验通信 (WHO_AM_I 应为 0x68) ── */
+    /* ── 校验通信 (WHO_AM_I) ── */
     whoami = MPU6050_Read_REG(MPU6050_WHO_AM_I);
-    if (whoami != MPU6050_ADDR) {
-        /* 通信异常, 但仍标记就绪以观察原始数据 (调试用)
-         * 生产环境应 return -1 */
+    if (whoami != 0x68 && whoami != 0x70) {
+        /* MPU6050=0x68, MPU6500=0x70; 其他值表示 I2C 通信异常 */
         return -1;
     }
 

@@ -1108,20 +1108,16 @@ static void debug_print(void *pvParameters)
     (void)pvParameters;
     char buf[128];
 
-    /* 观察阶段: CSV 带时间戳输出 pitch/roll/yaw, 便于上位机绘曲线测稳定时间
-     * 格式: t_ms,pitch,roll,yaw */
+    /* CSV 遥测: t_ms,pitch,roll,yaw (供上位机绘曲线 / yaw 闭环调试) */
     for (;;) {
         attitude_msg_t s;
-        if (xQueuePeek(g_attitude_queue, &s, 0) == pdPASS) {
+        if (xQueuePeek(g_attitude_queue, &s, 0) == pdPASS && s.status == 0) {
             int n = snprintf(buf, sizeof(buf), "%lu,%.2f,%.2f,%.2f\r\n",
                              (unsigned long)(xTaskGetTickCount() * portTICK_PERIOD_MS),
                              s.pitch, s.roll, s.yaw);
-            if (n > 0) {
-                uart0_sendStr(buf);
-            }
+            if (n > 0) uart0_sendStr(buf);
         }
-
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 /* ═══════════════════════════════════════════════════════════════════════════
