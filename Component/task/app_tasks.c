@@ -521,21 +521,23 @@ static void YawKeySet_Task(void *pvParameters)
 #define YAW_LOOP_PERIOD_MS          50
 #define YAW_LOOP_DIVIDER            (YAW_LOOP_PERIOD_MS / YAW_LOOP_TIMER_TICK_MS)
 #define YAW_PID_DEFAULT_KP_MILLI    120
-#define YAW_PID_DEFAULT_KI_MILLI    3
+#define YAW_PID_DEFAULT_KI_MILLI    0
 #define YAW_PID_DEFAULT_KD_MILLI    170
 #define YAW_PID_OUTPUT_LIMIT_RPM    200
 #define YAW_DYNAMIC_CAP_BASE_RPM    18
 #define YAW_DYNAMIC_CAP_ERR_DIV     14
 #define YAW_MIN_TURN_RPM            7    /* 死区外给一次明确修正，避免 4RPM 小碎步 */
 #define YAW_DEADBAND_DEG10          12   /* 1.2° 内认为到位，配合短接制动抑制末端碎步 */
+#define YAW_REACQUIRE_DEG10         32   /* 到位后需超过 3.2° 才重新修正，避免噪声触发末端碎步 */
+#define YAW_REACQUIRE_CONFIRM_COUNT 2U   /* 连续 2 个 yaw 周期超出重捕获阈值才重新修正 */
 #define YAW_INTEGRAL_ZONE_DEG10     120  /* 12° 内才积分，避免扰动回正中途积累过多 */
-#define YAW_INTEGRAL_LIMIT_RPM      2    /* 积分项最大贡献 ±2RPM，尾段主要靠前馈而不是慢积分 */
+#define YAW_INTEGRAL_LIMIT_RPM      0    /* 保持态默认不用积分追尾差，优先换取无超调/无碎步 */
 #define YAW_MIN_TURN_ZONE_DEG10     180  /* 18° 内启用连续恢复速度曲线，避免中途停顿 */
 #define YAW_TARGET_RAMP_STEP_DEG10  150  /* 目标斜坡步长，单位 0.1°/50ms，45°约 150ms 完成 */
 #define YAW_RECOVER_MAX_TURN_RPM    15   /* 小误差恢复曲线最大转向速度，低于大误差动态限幅 */
 #define YAW_APPROACH_BRAKE_ZONE_DEG10 120 /* 12° 内若误差正在快速变小，则提前清零并短接制动 */
 #define YAW_APPROACH_DERR_DEG10     2    /* 0.2°/50ms 以上认为正在明显靠近目标 */
-#define SPEED_START_FF_PWM          15   /* 速度环低速最小 PWM，由 yaw 层按误差开关 */
+#define SPEED_START_FF_PWM          18   /* 速度环低速最小 PWM，过大会导致偶发末端小踢动 */
 
 static int32_t yaw_recover_turn_for_error(int32_t abs_err_deg10,
                                           int32_t deadband_deg10,
@@ -724,6 +726,8 @@ static void yaw_loop_task(void *pvParameters)
     uint32_t tick_divider = 0;
     int32_t control_target_yaw_deg10 = 0;
     bool control_target_initialized = false;
+    bool yaw_settled_latch = false;
+    uint8_t yaw_reacquire_count = 0;
 
     pid_pos_init(&yaw_pid, YAW_PID_DEFAULT_KP_MILLI,
                  YAW_PID_DEFAULT_KI_MILLI,
@@ -749,6 +753,8 @@ static void yaw_loop_task(void *pvParameters)
         if (xQueueReceive(g_yaw_target_queue, &target, 0) == pdPASS) {
             if (target.reset_pid) {
                 pid_pos_reset(&yaw_pid);
+                yaw_settled_latch = false;
+                yaw_reacquire_count = 0;
             }
         }
 
@@ -766,6 +772,8 @@ static void yaw_loop_task(void *pvParameters)
                 status.left_cmd_rpm = 0;
                 status.right_cmd_rpm = 0;
                 control_target_initialized = false;
+                yaw_settled_latch = false;
+                yaw_reacquire_count = 0;
                 g_speed_start_ff_enable = false;
             } else if (xQueuePeek(g_attitude_queue, &attitude, 0) != pdPASS ||
                        attitude.status != 0) {
@@ -774,6 +782,8 @@ static void yaw_loop_task(void *pvParameters)
                 status.left_cmd_rpm = 0;
                 status.right_cmd_rpm = 0;
                 control_target_initialized = false;
+                yaw_settled_latch = false;
+                yaw_reacquire_count = 0;
                 g_speed_start_ff_enable = false;
                 (void)app_tasks_set_wheel_speed_target(0, 0);
             } else {
@@ -797,19 +807,52 @@ static void yaw_loop_task(void *pvParameters)
                 bool allow_static_boost = (control_target_yaw_deg10 ==
                                            target.target_yaw_deg10);
                 int32_t yaw_derr_deg10 = 0;
-                status.turn_rpm = yaw_pid_compute_turn(&yaw_pid,
-                                                       control_error_yaw_deg10,
-                                                       allow_static_boost,
-                                                       &yaw_derr_deg10,
-                                                       NULL);
-                bool yaw_approaching_close =
-                    ((control_error_yaw_deg10 > 0 && yaw_derr_deg10 < 0) ||
-                     (control_error_yaw_deg10 < 0 && yaw_derr_deg10 > 0)) &&
-                    abs_i32(control_error_yaw_deg10) <= YAW_APPROACH_BRAKE_ZONE_DEG10 &&
-                    abs_i32(yaw_derr_deg10) >= YAW_APPROACH_DERR_DEG10;
+                int32_t abs_control_error = abs_i32(control_error_yaw_deg10);
+                bool yaw_approaching_close = false;
+
+                if (yaw_settled_latch) {
+                    if (abs_control_error >= YAW_REACQUIRE_DEG10) {
+                        if (yaw_reacquire_count < YAW_REACQUIRE_CONFIRM_COUNT) {
+                            yaw_reacquire_count++;
+                        }
+                        if (yaw_reacquire_count >= YAW_REACQUIRE_CONFIRM_COUNT) {
+                            yaw_settled_latch = false;
+                            yaw_reacquire_count = 0;
+                            pid_pos_reset(&yaw_pid);
+                        }
+                    } else {
+                        yaw_reacquire_count = 0;
+                    }
+                }
+
+                if (yaw_settled_latch) {
+                    /* 已经到位后保持短接制动，不追 1~3° 的尾差，消除偶发小碎步。 */
+                    pid_pos_reset(&yaw_pid);
+                    status.turn_rpm = 0;
+                    yaw_approaching_close = true;
+                } else {
+                    status.turn_rpm = yaw_pid_compute_turn(&yaw_pid,
+                                                           control_error_yaw_deg10,
+                                                           allow_static_boost,
+                                                           &yaw_derr_deg10,
+                                                           NULL);
+                    yaw_approaching_close =
+                        ((control_error_yaw_deg10 > 0 && yaw_derr_deg10 < 0) ||
+                         (control_error_yaw_deg10 < 0 && yaw_derr_deg10 > 0)) &&
+                        abs_control_error <= YAW_APPROACH_BRAKE_ZONE_DEG10 &&
+                        abs_i32(yaw_derr_deg10) >= YAW_APPROACH_DERR_DEG10;
+                    if (abs_control_error <= YAW_DEADBAND_DEG10 ||
+                        (status.turn_rpm == 0 && yaw_approaching_close &&
+                         abs_control_error < YAW_REACQUIRE_DEG10)) {
+                        yaw_settled_latch = true;
+                        yaw_reacquire_count = 0;
+                        pid_pos_reset(&yaw_pid);
+                        status.turn_rpm = 0;
+                    }
+                }
                 /* 误差仍超过死区且需要转向修正时，才允许速度低速前馈；
                  * 接近目标且误差快速变小时关闭 FFS，避免扰动回正后冲过头。 */
-                g_speed_start_ff_enable = (status.turn_rpm != 0 &&
+                g_speed_start_ff_enable = (!yaw_settled_latch && status.turn_rpm != 0 &&
                     abs_i32(status.error_yaw_deg10) > YAW_DEADBAND_DEG10 &&
                     !yaw_approaching_close);
 
