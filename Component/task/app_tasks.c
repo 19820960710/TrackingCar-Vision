@@ -51,6 +51,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "UART/uart0.h"          /* 调试串口 (printf 重定向) */
+#include <stdio.h>
+
 /* ═══════════════════════════════════════════════════════════════════════════
  *  数据结构定义
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -518,20 +520,20 @@ static void YawKeySet_Task(void *pvParameters)
 #define YAW_LOOP_TIMER_TICK_MS     10
 #define YAW_LOOP_PERIOD_MS          50
 #define YAW_LOOP_DIVIDER            (YAW_LOOP_PERIOD_MS / YAW_LOOP_TIMER_TICK_MS)
-#define YAW_PID_DEFAULT_KP_MILLI    80
+#define YAW_PID_DEFAULT_KP_MILLI    95
 #define YAW_PID_DEFAULT_KI_MILLI    1
-#define YAW_PID_DEFAULT_KD_MILLI    60
-#define YAW_PID_OUTPUT_LIMIT_RPM    160
-#define YAW_DYNAMIC_CAP_BASE_RPM    12
-#define YAW_DYNAMIC_CAP_ERR_DIV     25
-#define YAW_MIN_TURN_RPM            15   /* 尾段最小转向速度补偿，仍走速度闭环 */
+#define YAW_PID_DEFAULT_KD_MILLI    90
+#define YAW_PID_OUTPUT_LIMIT_RPM    200
+#define YAW_DYNAMIC_CAP_BASE_RPM    22
+#define YAW_DYNAMIC_CAP_ERR_DIV     12
+#define YAW_MIN_TURN_RPM            0    /* 不再用 yaw 最小速度顶尾段，静摩擦交给速度环最小 PWM */
 #define YAW_DEADBAND_DEG10          15   /* 1.5° 内认为到位，兼顾静差与近目标抖动 */
 #define YAW_INTEGRAL_ZONE_DEG10     180  /* 18° 内才积分，避免大角度 windup */
-#define YAW_INTEGRAL_LIMIT_RPM      6    /* 积分项最大贡献 ±6RPM */
-#define YAW_MIN_TURN_ZONE_DEG10     180  /* 18° 内启用连续恢复速度曲线，避免中途停顿 */
-#define YAW_TARGET_RAMP_STEP_DEG10  80   /* 目标斜坡步长，单位 0.1°/50ms */
-#define YAW_RECOVER_MAX_TURN_RPM    30   /* 连续恢复曲线最大转向速度 */
-#define SPEED_START_FF_PWM          14   /* 低速启动前馈 PWM，由 yaw 层按误差开关 */
+#define YAW_INTEGRAL_LIMIT_RPM      5    /* 积分项最大贡献 ±5RPM，减少尾段残留 */
+#define YAW_MIN_TURN_ZONE_DEG10     180  /* 保留恢复曲线接口；默认 min_turn=0 时不强制最小速度 */
+#define YAW_TARGET_RAMP_STEP_DEG10  150  /* 目标斜坡步长，单位 0.1°/50ms，45°约 150ms 完成 */
+#define YAW_RECOVER_MAX_TURN_RPM    0    /* 默认关闭 yaw 最小速度恢复，由速度环前馈克服静摩擦 */
+#define SPEED_START_FF_PWM          16   /* 速度环低速最小 PWM，由 yaw 层按误差开关 */
 
 static int32_t yaw_recover_turn_for_error(int32_t abs_err_deg10,
                                           int32_t deadband_deg10,
@@ -604,20 +606,12 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
     if (izone < deadband) izone = deadband;
     if (ilimit < 0) ilimit = -ilimit;
 
-    /* 软死区：误差落在 deadband 内不直接归零，而是线性衰减到一个很小的
-     * 保持转向速度，避免“刚到目标就瞬间失去修正力”导致的停顿。 */
+    /* 到位死区：不再在 yaw 层给最小速度。
+     * 旧方案会在目标附近持续给 3~5RPM，小车靠速度环积分慢慢爬 PWM，
+     * 容易出现末端拖尾和过冲；现在进死区直接清零，静摩擦补偿只放在速度环。 */
     if (abs_err <= deadband) {
-        int32_t sign = (err_deg10 > 0) ? 1 : -1;
-        int32_t hold_turn = min_turn / 3;
-        if (hold_turn < 4) {
-            hold_turn = 4;
-        }
-        int32_t scaled = (abs_err * hold_turn) / (deadband > 0 ? deadband : 1);
         pid_pos_reset(pid);
-        if (scaled < 3) {
-            return 0;
-        }
-        return (sign > 0) ? scaled : -scaled;
+        return 0;
     }
 
     int32_t derr = 0;
@@ -882,11 +876,11 @@ static void yaw_loop_task(void *pvParameters)
 
 /**
  * @def SPEED_RAMP_STEP_RPM
- * @brief 速度目标斜坡步进，每 50ms 最多变化 30RPM，降低换档/反向冲击
+ * @brief 速度目标斜坡步进，每 50ms 最多变化 100RPM，保证 yaw 差速目标能快速落到速度环
  */
-#define SPEED_RAMP_STEP_RPM         80
-#define SPEED_START_FF_SETPOINT_RPM 60
-#define SPEED_START_FF_ERR_RPM 2
+#define SPEED_RAMP_STEP_RPM         100
+#define SPEED_START_FF_SETPOINT_RPM 90
+#define SPEED_START_FF_ERR_RPM 1
 
 static int32_t speed_apply_start_feedforward(int32_t pwm,
                                              int32_t setpoint_rpm,
@@ -1167,6 +1161,24 @@ static void oled_task(void *pvParameters)
     }
 }
 
+
+static void debug_print(void *pvParameters)
+{
+    (void)pvParameters;
+    char buf[128];
+
+    for (;;) {
+        attitude_msg_t new_status;
+
+        if (xQueuePeek(g_attitude_queue, &new_status, 0) == pdPASS) {
+            snprintf(buf, sizeof(buf), "%.2f\r\n",
+                     (float)new_status.yaw);
+            uart0_sendStr(buf);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
 /* ═══════════════════════════════════════════════════════════════════════════
  *  调度器启动函数
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -1229,6 +1241,8 @@ void app_tasks_start(void)
 
     /* OLED 显示: 含 OLED 显存 (128×8=1024字节) + I2C 通信缓冲 */
     xTaskCreate(oled_task,       "OLED",     512, NULL, 1, NULL);
+
+    xTaskCreate(debug_print,     "DEBUG",    512, NULL, 1, NULL);
 
     /* ── 启动 FreeRTOS 调度器 ──
      * 此后 CPU 控制权交给调度器, 本函数不再返回
