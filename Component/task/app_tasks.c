@@ -11,7 +11,7 @@
  *   | 任务名   | 优先级 | 栈大小 | 触发源                   | 功能                         |
  *   |---------|--------|--------|-------------------------|-----------------------------|
  *   | LED     | 1      | 128    | 周期 vTaskDelay(500ms)   | LED 闪烁, 心跳指示            |
- *   | MPU     | 2      | 512    | MPU6050 INT 引脚中断通知   | 软件 Mahony 四元数解算, 6轴→欧拉角 |
+ *   | MPU     | 2      | 512    | MPU6050 INT 引脚中断通知   | DMP 姿态数据采集, 四元数→欧拉角 |
  *   | SPD_LOOP| 3(最高)| 384    | TIMG0 10ms 定时中断通知    | 编码器读取 + 增量式 PID 速度闭环 |
  *   | GEAR    | 2      | 192    | 周期 vTaskDelay(10ms)    | 按键检测 + 速度档位循环切换      |
  *   | OLED    | 1      | 512    | 周期 vTaskDelay(100ms)   | 状态信息显示到 OLED 屏         |
@@ -51,7 +51,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "UART/uart0.h"          /* 调试串口 (printf 重定向) */
-#include <stdio.h>
 /* ═══════════════════════════════════════════════════════════════════════════
  *  数据结构定义
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -344,65 +343,132 @@ static void led_task(void *pvParameters)
 /* ═══════════════════════════════════════════════════════════════════════════
  *  任务 2: MPU6050 姿态采集任务 (优先级 2, 栈 512)
  *  ───────────────────────────────────────────
- *  功能: 软件 Mahony 四元数解算，6 轴原始数据→欧拉角
- *  触发: MPU6050 INT 引脚下降沿 (Data_Ready 100Hz) → ISR 发送任务通知
+ *  功能: DMP 姿态数据采集，四元数→欧拉角转换
+ *  触发: MPU6050 INT 引脚下降沿 → ISR 发送任务通知
  *
  *  工作流程:
- *  1. 初始化 MPU6050 (无 DMP, 寄存器配置 + Z 轴软校准)
- *  2. 等待 Data_Ready 中断通知 (100Hz)
- *  3. 突发读 6 轴数据 → Mahony 四元数解算 → pitch/roll/yaw
- *  4. 直接写入 attitude_queue (观察阶段: 不做稳定窗口/零点归一)
+ *  1. 初始化 MPU6050 + DMP (I2C 通信)
+ *  2. 等待 DMP 数据就绪中断通知
+ *  3. 读取 FIFO → 提取四元数 → 转换为 pitch/roll/yaw
+ *  4. 写入 attitude_queue (预留给平衡/巡线任务)
  *
- *  解算速率: 100Hz (MPU 采样率, INT 每周期触发)
+ *  DMP 输出速率: 50Hz (DEFAULT_MPU_HZ = 50)
  * ═══════════════════════════════════════════════════════════════════════════ */
+
+#define MPU_STABLE_REQUIRED_SAMPLES    80U   /* 50Hz 下 80 帧约 1.6s */
+#define MPU_STABLE_PITCH_RANGE_DEG     1.50f  /* 整个稳定窗口内 pitch 最大-最小值不超过该值 */
+#define MPU_STABLE_ROLL_RANGE_DEG      1.50f  /* 整个稳定窗口内 roll 最大-最小值不超过该值 */
+#define MPU_STABLE_YAW_RANGE_DEG       1.00f  /* 整个稳定窗口内 yaw 最大-最小值不超过该值 */
 
 static void mpu_task(void *pvParameters)
 {
     (void)pvParameters;
     attitude_msg_t msg = {0};
 
+    /* 上电后先判断 pitch/roll/yaw 三个数据均稳定，再开始写入队列 */
+    uint16_t attitude_stable_count = 0;   /* 当前稳定检测窗口内的采样数 */
+    float pitch_min = 0.0f;
+    float pitch_max = 0.0f;
+    float roll_min = 0.0f;
+    float roll_max = 0.0f;
+    float yaw_min = 0.0f;
+    float yaw_max = 0.0f;
+    float yaw_window_ref = 0.0f;          /* yaw 窗口参考角，用于处理 ±180° 跨界 */
+    float yaw_zero_offset = 0.0f;         /* 复位后 yaw 零点偏移 */
+    bool attitude_ready = false;          /* true 后才向队列发布姿态数据 */
+
     /* ── 等待 200ms: 确保 MPU6050 上电稳定 ── */
     vTaskDelay(pdMS_TO_TICKS(200));
 
-    /* ── 初始化 MPU6050 (软件解算, 无 DMP) ──
+    /* ── 初始化 MPU6050 + DMP ──
      * MPU6050_Init() 执行:
      *   1) I2C 总线恢复 (死锁检测与解除)
-     *   2) 寄存器配置 (采样率 100Hz, 量程, Data_Ready 中断)
-     *   3) Z 轴陀螺软校准 (100×10ms ≈ 1s)
+     *   2) 发送 DMP 固件 (inv_mpu_dmp_motion_driver.c)
+     *   3) 设置传感器方向矩阵
+     *   4) 启用 DMP 6 轴四元数推估 + 手势检测
+     *   5) 设置 FIFO 输出速率 = 50Hz
+     *   6) 启动 DMP
      * 返回 0 = 成功, 非 0 = 失败 */
     msg.status = MPU6050_Init();
 
     /* ── 初始化失败处理 ──
      * 将错误状态写入队列供其他任务读取，然后永久阻塞
-     * 常见失败原因: I2C 总线异常、MPU6050 未应答 */
+     * 常见失败原因: I2C 总线异常、MPU6050 未应答、DMP 固件加载失败 */
     if (msg.status != 0) {
         xQueueOverwrite(g_attitude_queue, &msg);
         for (;;) {
-            vTaskDelay(pdMS_TO_TICKS(1000));
+            vTaskDelay(pdMS_TO_TICKS(1000));  /* 每秒检查一次(实际不处理) */
         }
     }
 
-    /* ── 清空初始化期间可能产生的中断残留 ── */
+    /* ── 清空可能在 DMP 启动期间产生的中断残留 ──
+     * ulTaskNotifyTake(pdTRUE, 0): 非阻塞地清空任务通知计数 */
     (void)ulTaskNotifyTake(pdTRUE, 0);
 
-    /* ── 主循环: 等待 Data_Ready 中断 (100Hz) ── */
+    /* ── 主循环: 等待 DMP 数据就绪中断 ──
+     * portMAX_DELAY 表示阻塞直到收到通知 */
     for (;;) {
-        /* 阻塞等待 MPU6050 INT 引脚中断通知 */
+        /* 阻塞等待 MPU6050 INT 引脚中断通知 (50Hz) */
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-        /* 读取 6 轴数据 + Mahony 四元数解算 → 全局 pitch/roll/yaw
-         * 返回 0 = 成功, -2 = MPU6050 未就绪 */
-        if (MPU6050_Get_Attitude() == 0) {
+        /* 读取 DMP FIFO 数据 → 全局变量 quat[4]
+         * Read_Quad() 内部调用 dmp_read_fifo() 取出四元数,
+         * 转换为欧拉角存储到全局变量 pitch/roll/yaw (单位: °)
+         * 返回 0 = 成功, -1 = FIFO 读取错误, -2 = MPU6050 未就绪 */
+        if (Read_Quad() == 0) {
+            /* 启动阶段：必须整段窗口内 pitch/roll/yaw 都不继续漂移，才开始写入队列 */
+            if (!attitude_ready) {
+                if (attitude_stable_count == 0U) {
+                    pitch_min = pitch;
+                    pitch_max = pitch;
+                    roll_min = roll;
+                    roll_max = roll;
+                    yaw_window_ref = yaw;
+                    yaw_min = yaw;
+                    yaw_max = yaw;
+                    attitude_stable_count = 1U;
+                    continue;
+                }
+
+                float yaw_unwrapped = yaw_window_ref +
+                    normalize_angle_deg(yaw - yaw_window_ref);
+
+                if (pitch < pitch_min) pitch_min = pitch;
+                if (pitch > pitch_max) pitch_max = pitch;
+                if (roll < roll_min) roll_min = roll;
+                if (roll > roll_max) roll_max = roll;
+                if (yaw_unwrapped < yaw_min) yaw_min = yaw_unwrapped;
+                if (yaw_unwrapped > yaw_max) yaw_max = yaw_unwrapped;
+
+                attitude_stable_count++;
+                if (attitude_stable_count < MPU_STABLE_REQUIRED_SAMPLES) {
+                    continue;
+                }
+
+                if (((pitch_max - pitch_min) <= MPU_STABLE_PITCH_RANGE_DEG) &&
+                    ((roll_max - roll_min) <= MPU_STABLE_ROLL_RANGE_DEG) &&
+                    ((yaw_max - yaw_min) <= MPU_STABLE_YAW_RANGE_DEG)) {
+                    /* 三个数据稳定后，把当前朝向作为复位 yaw 零点 */
+                    yaw_zero_offset = yaw;
+                    attitude_ready = true;
+                } else {
+                    /* 这 10s 内仍在慢慢漂移，重新开启下一轮窗口检测 */
+                    attitude_stable_count = 0U;
+                    continue;
+                }
+            }
+
             msg.status = 0;
-            /* 观察阶段: 直接发布原始姿态 (yaw 仅做 ±180° 跨界归一,
-             * 不做零点归一), 便于从 t=0 观察漂移与稳定时间 */
+            /* pitch/roll 直接使用 DMP 输出，即显示相对重力方向的绝对倾角 */
             msg.pitch = pitch;
             msg.roll  = roll;
-            msg.yaw   = normalize_angle_deg(yaw);
+            /* yaw 没有磁力计绝对参考，因此只把“复位后的初始朝向”定义为 0° */
+            msg.yaw = normalize_angle_deg(yaw - yaw_zero_offset);
 
+            /* 写入队列（预留给后续平衡/巡线任务消费） */
             xQueueOverwrite(g_attitude_queue, &msg);
         }
-        /* 解算失败则跳过本次, 等待下一个中断 */
+        /* 如果 Read_Quad() 失败，跳过本次，等待下一个中断 */
     }
 }
 
@@ -1034,7 +1100,7 @@ static void oled_task(void *pvParameters)
 {
     (void)pvParameters;
     attitude_msg_t status = {0};  /* 本地缓存的显示状态 */
-    bool attitude_seen = false;      /* MPU 初始化前队列无数据 (约 1.2s) */
+    bool attitude_seen = false;      /* MPU 稳定前队列可能约 20s 无数据 */
     uint16_t oled_clear_count = 99;  /* OLED 刷屏计数器 (调试用) */
 
     /* ── 初始化 OLED (SSD1306 软件 I2C, PA28=SDA, PA31=SCL) ── */
@@ -1045,7 +1111,7 @@ static void oled_task(void *pvParameters)
     OLED_Refresh();  /* 显存 → 屏幕 */
     for (;;) {
 
-        /* MPU 初始化约 1.2s 后即开始发布姿态; 此前不能永久阻塞, 否则 OLED 无等待提示。 */
+        /* MPU 复位后约 20s 才发布稳定姿态；这里不能永久阻塞，否则 OLED 无等待提示。 */
         if (xQueuePeek(g_attitude_queue, &status, pdMS_TO_TICKS(20)) == pdPASS) {
             attitude_seen = true;
         }
@@ -1062,8 +1128,8 @@ static void oled_task(void *pvParameters)
             yaw_status_t yaw_status = g_yaw_status;
             int32_t tgt_abs = abs_i32(yaw_status.target_yaw_deg10);
             char tgt_sign = (yaw_status.target_yaw_deg10 < 0) ? '-' : ' ';
-            OLED_vsprint(0,0,16,"MPU init......  ");
-            OLED_vsprint(0,16,16,"wait ~1.2s     ");
+            OLED_vsprint(0,0,16,"MPU stabilizing");
+            OLED_vsprint(0,16,16,"wait about 20s ");
             OLED_vsprint(0,32,16,"YT:%c%3ld.%1ld %s", tgt_sign,
                          (long)(tgt_abs / 10), (long)(tgt_abs % 10),
                          yaw_status.enabled ? "ON " : "OFF");
@@ -1101,25 +1167,6 @@ static void oled_task(void *pvParameters)
     }
 }
 
-
-
-static void debug_print(void *pvParameters)
-{
-    (void)pvParameters;
-    char buf[128];
-
-    /* CSV 遥测: t_ms,pitch,roll,yaw (供上位机绘曲线 / yaw 闭环调试) */
-    for (;;) {
-        attitude_msg_t s;
-        if (xQueuePeek(g_attitude_queue, &s, 0) == pdPASS && s.status == 0) {
-            int n = snprintf(buf, sizeof(buf), "%lu,%.2f,%.2f,%.2f\r\n",
-                             (unsigned long)(xTaskGetTickCount() * portTICK_PERIOD_MS),
-                             s.pitch, s.roll, s.yaw);
-            if (n > 0) uart0_sendStr(buf);
-        }
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-}
 /* ═══════════════════════════════════════════════════════════════════════════
  *  调度器启动函数
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -1168,7 +1215,7 @@ void app_tasks_start(void)
     /* LED 心跳: 最低优先级, 最小栈 */
     xTaskCreate(led_task,        "LED",      128, NULL, 1, NULL);
 
-    /* MPU 姿态: 需 I2C 通信栈 + 浮点运算栈, 分配 512 */
+    /* MPU 姿态: 需 I2C 通信栈 + DMP 浮点运算栈, 分配 512 */
     xTaskCreate(mpu_task,        "MPU",      512, NULL, 2, &g_mpu_task_handle);
 
     /* yaw 角闭环: 由 10ms Timer 通知，先更新轮速目标，再通知速度闭环 */
@@ -1182,8 +1229,6 @@ void app_tasks_start(void)
 
     /* OLED 显示: 含 OLED 显存 (128×8=1024字节) + I2C 通信缓冲 */
     xTaskCreate(oled_task,       "OLED",     512, NULL, 1, NULL);
-
-    xTaskCreate(debug_print,     "DEBUG",    256, NULL, 1, NULL);
 
     /* ── 启动 FreeRTOS 调度器 ──
      * 此后 CPU 控制权交给调度器, 本函数不再返回
@@ -1201,7 +1246,7 @@ void app_tasks_start(void)
 /**
  * @brief  GPIO GROUP1 中断处理
  * @note   复用两个中断源:
- *         1. MPU6050 INT 引脚 (下降沿) → 通知 mpu_task 读取 6 轴数据并解算
+ *         1. MPU6050 INT 引脚 (下降沿) → 通知 mpu_task 读取 DMP 数据
  *         2. 右轮编码器 GPIO (双边沿) → 调用 encoder_right_irq_handler() 软件解码
  *
  *         中断优先级: 3 (configLIBRARY_LOWEST_INTERRUPT_PRIORITY)
@@ -1219,7 +1264,7 @@ void GROUP1_IRQHandler(void)
     }
 
     /* ── 子中断 2: MPU6050 INT 引脚下降沿中断 ──
-     * Data_Ready 就绪 (100Hz), 通知 mpu_task 从阻塞中唤醒 */
+     * DMP 数据就绪, 通知 mpu_task 从阻塞中唤醒 */
     if (MPU6050_IntIsPending()) {
         MPU6050_IntClear();  /* 清除中断标记 */
 
