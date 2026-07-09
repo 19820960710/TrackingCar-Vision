@@ -1,4 +1,4 @@
-#include "yaw_control/yaw_control.h"
+#include "control/yaw_control.h"
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  yaw 可调参数区

@@ -1,4 +1,4 @@
-#include "speed_control/speed_control.h"
+#include "control/speed_control.h"
 #include "encoder/encoder.h"
 #include "tb6612/tb6612.h"
 #include "pid/pid.h"

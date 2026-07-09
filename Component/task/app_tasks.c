@@ -13,8 +13,8 @@
 #include "oled/oled.h"
 #include "mpu6050/mpu6050.h"
 #include "encoder/encoder.h"
-#include "yaw_control/yaw_control.h"
-#include "speed_control/speed_control.h"
+#include "control/yaw_control.h"
+#include "control/speed_control.h"
 #include <stdint.h>
 #include <stdbool.h>
 
