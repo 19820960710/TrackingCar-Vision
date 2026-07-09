@@ -129,7 +129,7 @@ YAW_TARGET_RAMP_STEP_DEG10     150
 - `Component/control/yaw_control.*`：yaw 纯算法参数、目标斜坡、位置 PID、到位锁存、重捕获滞回。
 - `Component/control/speed_control.*`：速度环参数、私有 PID/PWM/滤波上下文、速度目标队列、速度状态快照、低速前馈。
 - `Component/service/`：姿态服务、yaw loop 服务、按键服务、OLED 显示服务。
-- `Component/task/app_tasks.c`：仅保留任务创建、ISR 分发、FreeRTOS hook 与对外 API 转发。
+- `Component/task/app_tasks.c`：保留任务入口、任务创建、ISR 分发、FreeRTOS hook 与对外 API 转发；业务细节调用 service step。
 
 速度环和 yaw 环的状态队列已经分离：
 

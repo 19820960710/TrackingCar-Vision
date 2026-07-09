@@ -1,5 +1,6 @@
 #include "service/attitude_service.h"
 #include "mpu6050/mpu6050.h"
+#include "FreeRTOS.h"
 #include "queue.h"
 #include <stdint.h>
 
@@ -14,8 +15,21 @@ typedef struct {
     float yaw;
 } attitude_raw_t;
 
+typedef struct {
+    uint16_t stable_count;
+    float pitch_min;
+    float pitch_max;
+    float roll_min;
+    float roll_max;
+    float yaw_min;
+    float yaw_max;
+    float yaw_window_ref;
+    float yaw_zero_offset;
+    bool ready;
+} attitude_stabilizer_t;
+
 static QueueHandle_t g_attitude_queue = NULL;
-static TaskHandle_t g_attitude_task_handle = NULL;
+static attitude_stabilizer_t g_stabilizer;
 
 static int32_t attitude_float_to_deg10(float angle_deg)
 {
@@ -52,12 +66,92 @@ static void attitude_publish_raw(const attitude_raw_t *raw, bool valid)
     (void)xQueueOverwrite(g_attitude_queue, &msg);
 }
 
+static void attitude_stabilizer_reset(attitude_stabilizer_t *st)
+{
+    attitude_stabilizer_t init = {0};
+    *st = init;
+}
+
+static bool attitude_stabilizer_accept(attitude_stabilizer_t *st)
+{
+    if (st->ready) {
+        return true;
+    }
+
+    if (st->stable_count == 0U) {
+        st->pitch_min = pitch;
+        st->pitch_max = pitch;
+        st->roll_min = roll;
+        st->roll_max = roll;
+        st->yaw_window_ref = yaw;
+        st->yaw_min = yaw;
+        st->yaw_max = yaw;
+        st->stable_count = 1U;
+        return false;
+    }
+
+    float yaw_unwrapped = st->yaw_window_ref +
+        attitude_normalize_deg(yaw - st->yaw_window_ref);
+
+    if (pitch < st->pitch_min) st->pitch_min = pitch;
+    if (pitch > st->pitch_max) st->pitch_max = pitch;
+    if (roll < st->roll_min) st->roll_min = roll;
+    if (roll > st->roll_max) st->roll_max = roll;
+    if (yaw_unwrapped < st->yaw_min) st->yaw_min = yaw_unwrapped;
+    if (yaw_unwrapped > st->yaw_max) st->yaw_max = yaw_unwrapped;
+
+    st->stable_count++;
+    if (st->stable_count < MPU_STABLE_REQUIRED_SAMPLES) {
+        return false;
+    }
+
+    if (((st->pitch_max - st->pitch_min) <= MPU_STABLE_PITCH_RANGE_DEG) &&
+        ((st->roll_max - st->roll_min) <= MPU_STABLE_ROLL_RANGE_DEG) &&
+        ((st->yaw_max - st->yaw_min) <= MPU_STABLE_YAW_RANGE_DEG)) {
+        st->yaw_zero_offset = yaw;
+        st->ready = true;
+        return true;
+    }
+
+    attitude_stabilizer_reset(st);
+    return false;
+}
+
 bool attitude_service_init(void)
 {
     if (g_attitude_queue == NULL) {
         g_attitude_queue = xQueueCreate(1, sizeof(app_attitude_t));
     }
+    attitude_stabilizer_reset(&g_stabilizer);
     return (g_attitude_queue != NULL);
+}
+
+bool attitude_service_begin(void)
+{
+    if (MPU6050_Init() != 0) {
+        attitude_publish_raw(NULL, false);
+        return false;
+    }
+    attitude_stabilizer_reset(&g_stabilizer);
+    return true;
+}
+
+void attitude_service_process_sample(void)
+{
+    if (Read_Quad() != 0) {
+        return;
+    }
+
+    if (!attitude_stabilizer_accept(&g_stabilizer)) {
+        return;
+    }
+
+    attitude_raw_t raw = {
+        .pitch = pitch,
+        .roll = roll,
+        .yaw = attitude_normalize_deg(yaw - g_stabilizer.yaw_zero_offset),
+    };
+    attitude_publish_raw(&raw, true);
 }
 
 bool attitude_service_get(app_attitude_t *out)
@@ -67,93 +161,4 @@ bool attitude_service_get(app_attitude_t *out)
         return false;
     }
     return true;
-}
-
-void attitude_service_notify_from_isr(BaseType_t *higher_priority_task_woken)
-{
-    if (g_attitude_task_handle != NULL) {
-        vTaskNotifyGiveFromISR(g_attitude_task_handle,
-                               higher_priority_task_woken);
-    }
-}
-
-void attitude_service_task(void *arg)
-{
-    (void)arg;
-    uint16_t stable_count = 0;
-    float pitch_min = 0.0f;
-    float pitch_max = 0.0f;
-    float roll_min = 0.0f;
-    float roll_max = 0.0f;
-    float yaw_min = 0.0f;
-    float yaw_max = 0.0f;
-    float yaw_window_ref = 0.0f;
-    float yaw_zero_offset = 0.0f;
-    bool attitude_ready = false;
-
-    g_attitude_task_handle = xTaskGetCurrentTaskHandle();
-
-    vTaskDelay(pdMS_TO_TICKS(200));
-    if (MPU6050_Init() != 0) {
-        attitude_publish_raw(NULL, false);
-        for (;;) {
-            vTaskDelay(pdMS_TO_TICKS(1000));
-        }
-    }
-
-    (void)ulTaskNotifyTake(pdTRUE, 0);
-
-    for (;;) {
-        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-        if (Read_Quad() != 0) {
-            continue;
-        }
-
-        if (!attitude_ready) {
-            if (stable_count == 0U) {
-                pitch_min = pitch;
-                pitch_max = pitch;
-                roll_min = roll;
-                roll_max = roll;
-                yaw_window_ref = yaw;
-                yaw_min = yaw;
-                yaw_max = yaw;
-                stable_count = 1U;
-                continue;
-            }
-
-            float yaw_unwrapped = yaw_window_ref +
-                attitude_normalize_deg(yaw - yaw_window_ref);
-
-            if (pitch < pitch_min) pitch_min = pitch;
-            if (pitch > pitch_max) pitch_max = pitch;
-            if (roll < roll_min) roll_min = roll;
-            if (roll > roll_max) roll_max = roll;
-            if (yaw_unwrapped < yaw_min) yaw_min = yaw_unwrapped;
-            if (yaw_unwrapped > yaw_max) yaw_max = yaw_unwrapped;
-
-            stable_count++;
-            if (stable_count < MPU_STABLE_REQUIRED_SAMPLES) {
-                continue;
-            }
-
-            if (((pitch_max - pitch_min) <= MPU_STABLE_PITCH_RANGE_DEG) &&
-                ((roll_max - roll_min) <= MPU_STABLE_ROLL_RANGE_DEG) &&
-                ((yaw_max - yaw_min) <= MPU_STABLE_YAW_RANGE_DEG)) {
-                yaw_zero_offset = yaw;
-                attitude_ready = true;
-            } else {
-                stable_count = 0U;
-                continue;
-            }
-        }
-
-        attitude_raw_t raw = {
-            .pitch = pitch,
-            .roll = roll,
-            .yaw = attitude_normalize_deg(yaw - yaw_zero_offset),
-        };
-        attitude_publish_raw(&raw, true);
-    }
 }

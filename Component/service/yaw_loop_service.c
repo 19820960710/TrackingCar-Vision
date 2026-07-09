@@ -2,6 +2,7 @@
 #include "service/attitude_service.h"
 #include "control/yaw_control.h"
 #include "control/speed_control.h"
+#include "FreeRTOS.h"
 #include "queue.h"
 
 typedef struct {
@@ -23,8 +24,7 @@ typedef struct {
 
 static QueueHandle_t g_yaw_target_queue = NULL;
 static QueueHandle_t g_yaw_state_queue = NULL;
-static TaskHandle_t g_yaw_loop_task_handle = NULL;
-static TaskHandle_t g_speed_loop_task_handle = NULL;
+static yaw_loop_context_t g_yaw_ctx;
 
 static void yaw_loop_init_context(yaw_loop_context_t *ctx)
 {
@@ -100,14 +100,6 @@ static void yaw_loop_update_50ms(yaw_loop_context_t *ctx)
     (void)xQueueOverwrite(g_yaw_state_queue, status);
 }
 
-static void yaw_loop_step_10ms(yaw_loop_context_t *ctx)
-{
-    yaw_loop_receive_target(ctx);
-    if (yaw_loop_period_elapsed(ctx)) {
-        yaw_loop_update_50ms(ctx);
-    }
-}
-
 bool yaw_loop_service_init(void)
 {
     if (g_yaw_target_queue == NULL) {
@@ -125,19 +117,15 @@ bool yaw_loop_service_init(void)
     initial_target.reset_pid = true;
     (void)xQueueOverwrite(g_yaw_target_queue, &initial_target);
     (void)xQueueOverwrite(g_yaw_state_queue, &initial_status);
+    yaw_loop_init_context(&g_yaw_ctx);
     return true;
 }
 
-void yaw_loop_service_set_speed_task_handle(TaskHandle_t handle)
+void yaw_loop_service_step_10ms(void)
 {
-    g_speed_loop_task_handle = handle;
-}
-
-void yaw_loop_service_notify_from_isr(BaseType_t *higher_priority_task_woken)
-{
-    if (g_yaw_loop_task_handle != NULL) {
-        vTaskNotifyGiveFromISR(g_yaw_loop_task_handle,
-                               higher_priority_task_woken);
+    yaw_loop_receive_target(&g_yaw_ctx);
+    if (yaw_loop_period_elapsed(&g_yaw_ctx)) {
+        yaw_loop_update_50ms(&g_yaw_ctx);
     }
 }
 
@@ -183,22 +171,4 @@ bool yaw_loop_service_is_settled(void)
         return false;
     }
     return status.enabled && status.settled;
-}
-
-void yaw_loop_service_task(void *arg)
-{
-    (void)arg;
-    yaw_loop_context_t ctx;
-
-    g_yaw_loop_task_handle = xTaskGetCurrentTaskHandle();
-    yaw_loop_init_context(&ctx);
-
-    for (;;) {
-        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        yaw_loop_step_10ms(&ctx);
-
-        if (g_speed_loop_task_handle != NULL) {
-            xTaskNotifyGive(g_speed_loop_task_handle);
-        }
-    }
 }

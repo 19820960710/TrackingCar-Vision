@@ -1,6 +1,6 @@
 /**
  * @file    app_tasks.c
- * @brief   FreeRTOS 任务创建、ISR 分发与应用层 API 转发。
+ * @brief   FreeRTOS 任务入口、ISR 分发与应用层 API 转发。
  */
 
 #include "FreeRTOS.h"
@@ -18,6 +18,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+static TaskHandle_t g_attitude_task_handle = NULL;
+static TaskHandle_t g_yaw_loop_task_handle = NULL;
 static TaskHandle_t g_speed_loop_task_handle = NULL;
 
 static void led_task(void *pvParameters)
@@ -26,6 +28,38 @@ static void led_task(void *pvParameters)
     for (;;) {
         led_toggle();
         vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
+static void attitude_task(void *pvParameters)
+{
+    (void)pvParameters;
+
+    vTaskDelay(pdMS_TO_TICKS(200));
+    if (!attitude_service_begin()) {
+        for (;;) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+    }
+
+    (void)ulTaskNotifyTake(pdTRUE, 0);
+    for (;;) {
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        attitude_service_process_sample();
+    }
+}
+
+static void yaw_loop_task(void *pvParameters)
+{
+    (void)pvParameters;
+
+    for (;;) {
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        yaw_loop_service_step_10ms();
+
+        if (g_speed_loop_task_handle != NULL) {
+            xTaskNotifyGive(g_speed_loop_task_handle);
+        }
     }
 }
 
@@ -41,6 +75,30 @@ static void speed_loop_task(void *pvParameters)
     for (;;) {
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         speed_control_step_10ms();
+    }
+}
+
+static void yaw_key_task(void *pvParameters)
+{
+    (void)pvParameters;
+    yaw_key_service_t key_ctx;
+
+    yaw_key_service_init(&key_ctx);
+    for (;;) {
+        yaw_key_service_step_10ms(&key_ctx);
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+static void oled_task(void *pvParameters)
+{
+    (void)pvParameters;
+    app_oled_service_t oled_ctx;
+
+    app_oled_service_init(&oled_ctx);
+    for (;;) {
+        app_oled_service_update(&oled_ctx);
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
 }
 
@@ -125,14 +183,15 @@ void app_tasks_start(void)
         while (1) {}
     }
 
-    xTaskCreate(led_task,                 "LED",      128, NULL, 1, NULL);
-    xTaskCreate(attitude_service_task,    "MPU",      512, NULL, 2, NULL);
-    xTaskCreate(speed_loop_task,          "SPD_LOOP", 512, NULL, 3,
+    xTaskCreate(led_task,        "LED",      128, NULL, 1, NULL);
+    xTaskCreate(attitude_task,   "MPU",      512, NULL, 2,
+                &g_attitude_task_handle);
+    xTaskCreate(yaw_loop_task,   "YAW_LOOP", 384, NULL, 4,
+                &g_yaw_loop_task_handle);
+    xTaskCreate(speed_loop_task, "SPD_LOOP", 512, NULL, 3,
                 &g_speed_loop_task_handle);
-    yaw_loop_service_set_speed_task_handle(g_speed_loop_task_handle);
-    xTaskCreate(yaw_loop_service_task,    "YAW_LOOP", 384, NULL, 4, NULL);
-    xTaskCreate(yaw_key_service_task,     "YAW_KEY",  192, NULL, 2, NULL);
-    xTaskCreate(app_oled_service_task,    "OLED",     512, NULL, 1, NULL);
+    xTaskCreate(yaw_key_task,    "YAW_KEY",  192, NULL, 2, NULL);
+    xTaskCreate(oled_task,       "OLED",     512, NULL, 1, NULL);
 
     vTaskStartScheduler();
     while (1) {}
@@ -148,7 +207,10 @@ void GROUP1_IRQHandler(void)
 
     if (MPU6050_IntIsPending()) {
         MPU6050_IntClear();
-        attitude_service_notify_from_isr(&xHigherPriorityTaskWoken);
+        if (g_attitude_task_handle != NULL) {
+            vTaskNotifyGiveFromISR(g_attitude_task_handle,
+                                   &xHigherPriorityTaskWoken);
+        }
     }
 
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
@@ -160,7 +222,10 @@ void TIMER_0_INST_IRQHandler(void)
 
     switch (DL_TimerG_getPendingInterrupt(TIMER_0_INST)) {
     case DL_TIMER_IIDX_ZERO:
-        yaw_loop_service_notify_from_isr(&xHigherPriorityTaskWoken);
+        if (g_yaw_loop_task_handle != NULL) {
+            vTaskNotifyGiveFromISR(g_yaw_loop_task_handle,
+                                   &xHigherPriorityTaskWoken);
+        }
         break;
     default:
         break;
