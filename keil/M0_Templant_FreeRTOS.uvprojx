@@ -642,6 +642,36 @@
           </Files>
         </Group>
         <Group>
+          <GroupName>Component/yaw_control</GroupName>
+          <Files>
+            <File>
+              <FileName>yaw_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/yaw_control/yaw_control.c</FilePath>
+            </File>
+            <File>
+              <FileName>yaw_control.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/yaw_control/yaw_control.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Component/speed_control</GroupName>
+          <Files>
+            <File>
+              <FileName>speed_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/speed_control/speed_control.c</FilePath>
+            </File>
+            <File>
+              <FileName>speed_control.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/speed_control/speed_control.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
           <GroupName>Component/task</GroupName>
           <Files>
             <File>

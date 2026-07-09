@@ -53,9 +53,10 @@ g_speed_start_ff_pwm = 14   // 在线命令 FFS 可调
 - **低速启动前馈** `speed_apply_start_feedforward`：
   - 只在 `|setpoint| ≤ 60RPM` 且速度误差 `> 2RPM` 时启用。
   - 把 PWM 至少顶到 ±14，让小目标能真正转起来，不再等积分慢慢爬。
-- **关键：前馈由 yaw 层开关** `g_speed_start_ff_enable`：
+- **关键：前馈由 yaw 层按目标消息开关**：
   - yaw 误差 > 死区且 `turn≠0` 时才开。
   - 进入死区/到位后立刻关，避免“yaw 想停、速度环还在顶”造成末端抖动。
+  - 当前主线已不使用 `g_speed_start_ff_enable` 全局变量，改为随速度目标消息传入速度环。
 
 ## 调试用串口命令（仅调试分支）
 
@@ -90,3 +91,50 @@ BASE / YAW / YAW10 / START / STOP / ESTOP / CLR / WHEEL / HELP
 
 - 180° 跨 ±180° 边界时如果 hold 太短会看起来异常，属于测试时段不足 + 边界跳变，非算法 bug。
 - 生产版合并前需做“清理提交”：删除串口命令解析、TEL 高频遥测、调试脚本，只保留最终控制逻辑和默认参数。
+
+
+---
+
+## 生产版后续优化记录（当前主线）
+
+在第二轮调试基础上，当前主线又做了两类优化：
+
+### 控制策略更新
+
+当前 yaw 参数已调整为更偏抗扰稳定的配置：
+
+```c
+YAW_PID_DEFAULT_KP_MILLI       120
+YAW_PID_DEFAULT_KI_MILLI       0
+YAW_PID_DEFAULT_KD_MILLI       170
+YAW_PID_OUTPUT_LIMIT_RPM       200
+YAW_MIN_TURN_RPM               7
+YAW_DEADBAND_DEG10             12
+YAW_REACQUIRE_DEG10            25
+YAW_REACQUIRE_CONFIRM_COUNT    2
+YAW_TARGET_RAMP_STEP_DEG10     150
+```
+
+关键变化：
+
+- 关闭 yaw 积分，避免扰动回正后积分残留导致超调。
+- 到位后锁存，不追 1~2° 尾差，减少“小碎步”。
+- 超出重捕获阈值并连续确认后才重新修正，过滤噪声/机械回弹。
+- 接近目标且误差快速变小时清零 yaw 输出，由速度环短接制动。
+
+### 结构重构
+
+当前主线已把控制算法从 `app_tasks.c` 拆出：
+
+- `Component/yaw_control/`：yaw 参数、目标斜坡、位置 PID、到位锁存、重捕获滞回。
+- `Component/speed_control/`：速度环参数、`speed_loop_context_t`、速度目标队列、速度状态队列、低速前馈。
+- `Component/task/app_tasks.c`：仅保留任务、队列胶水、ISR、OLED、对外接口。
+
+速度环和 yaw 环的状态队列已经分离：
+
+```text
+yaw:   g_yaw_target_queue / g_yaw_state_queue
+speed: g_speed_target_queue / g_speed_state_queue   // speed_control.c 内部私有
+```
+
+这样后续循线等功能可以单独复用速度环，不需要依赖 yaw 状态。

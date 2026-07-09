@@ -18,17 +18,6 @@
 #include <stdint.h>
 
 /**
- * @brief 轮速目标结构体 (通过 target_speed_queue 传递)
- *
- * 正数 = 前进, 负数 = 后退, 单位: RPM
- * 可设置差速: left_rpm ≠ right_rpm 实现转向
- */
-typedef struct {
-    int32_t left_rpm;   /**< 左轮目标速度 (RPM) */
-    int32_t right_rpm;  /**< 右轮目标速度 (RPM) */
-} app_wheel_speed_target_t;
-
-/**
  * @brief yaw 角闭环目标结构体
  *
  * yaw 角单位为 0.1°，例如 45° = 450。
@@ -71,6 +60,13 @@ bool app_tasks_set_wheel_speed_target(int32_t left_rpm, int32_t right_rpm);
  *         都应调用该接口，不直接操作左右轮差速。
  */
 bool app_tasks_set_yaw_target(int32_t base_speed_rpm, int32_t target_yaw_deg10);
+
+/**
+ * @brief  阻塞等待 yaw 调节完成，timeout_ms=0 时只轮询一次
+ * @param  timeout_ms 超时时间，0 表示只检查一次
+ * @return 0=已完成或已超时，1=未到位且仍在等待中（仅 timeout_ms=0 轮询时返回）
+ */
+int app_tasks_wait_yaw_settled(uint32_t timeout_ms);
 
 /**
  * @brief  创建所有 FreeRTOS 任务并启动调度器
