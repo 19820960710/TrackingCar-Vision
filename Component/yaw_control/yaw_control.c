@@ -6,14 +6,14 @@
  * ═══════════════════════════════════════════════════════════════════════════ */
 #define YAW_LOOP_PERIOD_MS             50
 #define YAW_PID_DEFAULT_KP_MILLI       120
-#define YAW_PID_DEFAULT_KI_MILLI       0
+#define YAW_PID_DEFAULT_KI_MILLI       5
 #define YAW_PID_DEFAULT_KD_MILLI       170
 #define YAW_PID_OUTPUT_LIMIT_RPM       200
 #define YAW_DYNAMIC_CAP_BASE_RPM       18
 #define YAW_DYNAMIC_CAP_ERR_DIV        14
 #define YAW_MIN_TURN_RPM               7    /* 死区外给一次明确修正，避免小碎步 */
 #define YAW_DEADBAND_DEG10             12   /* 1.2° 内认为到位 */
-#define YAW_REACQUIRE_DEG10            25   /* 到位后需超过 2.5° 才重新修正 */
+#define YAW_REACQUIRE_DEG10            20   /* 到位后需超过 2.0° 才重新修正 */
 #define YAW_REACQUIRE_CONFIRM_COUNT    2U   /* 连续 2 个 yaw 周期超出阈值才重捕获 */
 #define YAW_INTEGRAL_ZONE_DEG10        120  /* 12° 内才积分 */
 #define YAW_INTEGRAL_LIMIT_RPM         0    /* 保持态默认不用积分追尾差 */

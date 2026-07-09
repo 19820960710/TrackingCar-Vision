@@ -14,13 +14,14 @@
  *   Component/task/app_tasks.c: 全部 FreeRTOS 任务、队列、中断胶水层
  *     - LED 闪烁任务 (1Hz)
  *     - MPU6050 姿态采集任务 (50Hz, DMP 中断驱动)
- *     - 速度闭环控制任务 (10ms Timer 中断驱动, PID 控制)
- *     - 速度档位切换任务 (按键检测, 8 档循环)
- *     - OLED 显示任务 (100ms 刷新)
+ *     - yaw 角闭环任务 (10ms Timer 驱动，50ms 更新目标差速)
+ *     - 速度闭环控制任务 (10ms 采样，50ms PID 更新)
+ *     - yaw 目标角切换任务 (PB21 每次 +45°)
+ *     - OLED 显示任务 (200ms 刷新)
  *
  *   ── 控制算法 ──
- *   增量式 PID 速度闭环，10ms 读取编码器，50ms 窗口计算 RPM 并更新 PID 输出
- *   速度档位: ±20, ±100, ±300, ±400 RPM (按键循环切换)
+ *   yaw 位置环输出左右轮差速目标；速度环使用增量式 PID，
+ *   10ms 读取编码器，50ms 窗口计算 RPM 并更新 PWM。
  */
 
 #include "ti_msp_dl_config.h"   /* SysConfig 自动生成的硬件配置 */
@@ -71,10 +72,10 @@ int main(void)
 
     /* ── 启动提示: 输出到 UART0 调试串口 (115200 8N1) ──
      * 此时调度器尚未启动，uart0_sendStr 直接阻塞发送 */
-    uart0_sendStr("M0 Speed Closed Loop Ready | key gears | 80MHz\r\n");
+    uart0_sendStr("M0 Yaw+Speed Closed Loop Ready | yaw key | 80MHz\r\n");
 
     /* ── 创建所有 FreeRTOS 任务并启动调度器 ──
-     * app_tasks_start() 内部调用 xTaskCreate() 创建 5 个任务，
+     * app_tasks_start() 内部调用 xTaskCreate() 创建应用任务，
      * 然后调用 vTaskStartScheduler() 启动调度器，不再返回 */
     app_tasks_start();
 

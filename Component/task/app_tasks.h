@@ -1,15 +1,6 @@
 /**
  * @file    app_tasks.h
- * @brief   应用层 FreeRTOS 任务与中断胶水层接口
- *
- * ── 架构约定 ──
- * - main.c: 硬件初始化 + 调用 app_tasks_start()
- * - app_tasks.c: 全部 FreeRTOS 对象 (任务/队列/ISR/钩子)
- * - 其他模块可通过 app_tasks_set_wheel_speed_target() 下发速度目标
- *
- * ── 扩展思路 ──
- * 后续平衡/巡线任务可调用 app_tasks_set_wheel_speed_target() 直接设定
- * 左右轮差速目标, 无需关心底层 PID/编码器/电机驱动细节.
+ * @brief   应用层 FreeRTOS 任务与对外控制/状态接口
  */
 #ifndef APP_TASKS_H
 #define APP_TASKS_H
@@ -17,66 +8,62 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/**
- * @brief yaw 角闭环目标结构体
- *
- * yaw 角单位为 0.1°，例如 45° = 450。
- * base_speed_rpm 为左右轮共同基准速度，yaw PID 输出会叠加为差速修正。
- */
+/** @brief yaw 角闭环目标结构体，角度单位为 0.1°。 */
 typedef struct {
     int32_t base_speed_rpm;   /**< 基准速度 (RPM)，正前进/负后退 */
-    int32_t target_yaw_deg10; /**< 期望 yaw 角 ×10，范围建议 (-1800, 1800] */
+    int32_t target_yaw_deg10; /**< 期望 yaw 角 ×10，例如 45° = 450 */
 } app_yaw_target_t;
 
-/**
- * @brief  设置左右轮目标速度 (外部接口)
- * @param  left_rpm   左轮目标速度 (RPM), 正前进/负后退
- * @param  right_rpm  右轮目标速度 (RPM), 正前进/负后退
- * @return true=写入成功, false=队列未就绪 (越早调用)
- *
- * @note   通过 xQueueOverwrite 写入, 保证不阻塞调用者
- *         可为后续陀螺仪修正/红外巡线任务提供统一的速度控制接口
- *
- * @code
- *   // 直行: 两轮等速
- *   app_tasks_set_wheel_speed_target(200, 200);
- *
- *   // 原地左转: 差速驱动
- *   app_tasks_set_wheel_speed_target(-100, 100);
- *
- *   // 停止
- *   app_tasks_set_wheel_speed_target(0, 0);
- * @endcode
- */
+/** @brief 对外姿态快照；角度单位均为 0.1°。 */
+typedef struct {
+    int32_t pitch_deg10;
+    int32_t roll_deg10;
+    int32_t yaw_deg10;
+    bool valid;              /**< true=MPU 已稳定且数据有效 */
+} app_attitude_t;
+
+/** @brief 对外两轮速度快照；不包含 PWM/PID 等内部状态。 */
+typedef struct {
+    int32_t left_rpm;
+    int32_t right_rpm;
+    int32_t left_target_rpm;
+    int32_t right_target_rpm;
+    bool stopped;
+} app_wheel_speed_t;
+
+/** @brief 对外 yaw 闭环状态快照；不包含 PID 内部状态。 */
+typedef struct {
+    int32_t base_speed_rpm;
+    int32_t target_yaw_deg10;
+    int32_t current_yaw_deg10;
+    int32_t error_yaw_deg10;
+    int32_t turn_rpm;
+    bool enabled;
+    bool settled;
+} app_yaw_status_t;
+
+/** @brief 应用层聚合状态快照。 */
+typedef struct {
+    app_attitude_t attitude;
+    app_wheel_speed_t wheel_speed;
+    app_yaw_status_t yaw;
+    bool attitude_available;
+    bool wheel_speed_available;
+    bool yaw_status_available;
+} app_vehicle_state_t;
+
 bool app_tasks_set_wheel_speed_target(int32_t left_rpm, int32_t right_rpm);
-
-/**
- * @brief  设置 yaw 角闭环目标
- * @param  base_speed_rpm    基准速度 (RPM)，默认可传 0 实现原地转向/定向
- * @param  target_yaw_deg10  期望 yaw 角 ×10，例如 45° 传 450
- * @return true=写入成功, false=队列未就绪
- *
- * @note   这是 yaw 上层闭环的统一入口。按键、巡线/上位机等上层逻辑
- *         都应调用该接口，不直接操作左右轮差速。
- */
 bool app_tasks_set_yaw_target(int32_t base_speed_rpm, int32_t target_yaw_deg10);
-
-/**
- * @brief  阻塞等待 yaw 调节完成，timeout_ms=0 时只轮询一次
- * @param  timeout_ms 超时时间，0 表示只检查一次
- * @return 0=已完成或已超时，1=未到位且仍在等待中（仅 timeout_ms=0 轮询时返回）
- */
 int app_tasks_wait_yaw_settled(uint32_t timeout_ms);
+
+bool app_tasks_get_attitude(app_attitude_t *out);
+bool app_tasks_get_wheel_speed(app_wheel_speed_t *out);
+bool app_tasks_get_yaw_status(app_yaw_status_t *out);
+bool app_tasks_get_vehicle_state(app_vehicle_state_t *out);
 
 /**
  * @brief  创建所有 FreeRTOS 任务并启动调度器
- * @note   执行顺序:
- *         1) 创建队列 (attitude/status/target_speed)
- *         2) 创建 5 个任务 (LED/MPU/SPD_LOOP/GEAR/OLED)
- *         3) 调用 vTaskStartScheduler()
- *
- *         成功后不返回; 失败则死循环
- *         应在硬件初始化完成后调用
+ * @note   成功后不返回；应在硬件初始化完成后调用。
  */
 void app_tasks_start(void);
 

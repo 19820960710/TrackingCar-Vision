@@ -1,6 +1,7 @@
 #include "speed_control/speed_control.h"
 #include "encoder/encoder.h"
 #include "tb6612/tb6612.h"
+#include "pid/pid.h"
 #include "FreeRTOS.h"
 #include "queue.h"
 #include <stddef.h>
@@ -23,27 +24,70 @@
 #define SPEED_START_FF_MIN_PWM           12
 
 typedef struct {
-    bool wheels_stopped;
-} speed_state_t;
+    int32_t left_rpm;
+    int32_t right_rpm;
+    bool low_speed_ff_enable;
+} speed_target_msg_t;
+
+typedef struct {
+    pid_inc_t left_pid;
+    pid_inc_t right_pid;
+    int32_t left_rpm10_filt;
+    int32_t right_rpm10_filt;
+    int32_t left_target_rpm;
+    int32_t right_target_rpm;
+    int32_t left_setpoint_rpm;
+    int32_t right_setpoint_rpm;
+    int32_t left_delta_sum;
+    int32_t right_delta_sum;
+    uint32_t sample_count;
+    int32_t left_rpm;
+    int32_t right_rpm;
+    int32_t left_pwm;
+    int32_t right_pwm;
+} speed_loop_context_t;
 
 static QueueHandle_t g_speed_target_queue = NULL;
 static QueueHandle_t g_speed_state_queue = NULL;
+static speed_loop_context_t g_speed_ctx;
+static bool g_low_speed_ff_enable = false;
+
+static int32_t abs_i32(int32_t value);
+static void speed_control_pid_init(pid_inc_t *left_pid, pid_inc_t *right_pid);
+static int32_t speed_control_ramp_step(int32_t current, int32_t target);
+static int32_t speed_control_apply_start_feedforward(int32_t pwm,
+                                                     int32_t setpoint_rpm,
+                                                     int32_t measured_rpm,
+                                                     bool enable);
+static void speed_loop_init(speed_loop_context_t *ctx);
+static void speed_loop_set_target(speed_loop_context_t *ctx,
+                                  int32_t left_rpm,
+                                  int32_t right_rpm);
+static void speed_loop_update(speed_loop_context_t *ctx, bool start_ff_enable);
+static bool speed_loop_is_wheels_stopped(const speed_loop_context_t *ctx);
+static void speed_control_publish_state(const speed_loop_context_t *ctx);
+static bool speed_control_receive_target(speed_target_msg_t *target);
 
 static int32_t abs_i32(int32_t value)
 {
     return (value < 0) ? -value : value;
 }
 
-bool speed_control_queue_init(void)
+bool speed_control_init(void)
 {
-    speed_state_t initial_state = { true };
-
-    g_speed_target_queue = xQueueCreate(1, sizeof(speed_target_msg_t));
-    g_speed_state_queue = xQueueCreate(1, sizeof(speed_state_t));
+    if (g_speed_target_queue == NULL) {
+        g_speed_target_queue = xQueueCreate(1, sizeof(speed_target_msg_t));
+    }
+    if (g_speed_state_queue == NULL) {
+        g_speed_state_queue = xQueueCreate(1, sizeof(speed_control_state_t));
+    }
     if (g_speed_target_queue == NULL || g_speed_state_queue == NULL) {
         return false;
     }
-    (void)xQueueOverwrite(g_speed_state_queue, &initial_state);
+
+    g_low_speed_ff_enable = false;
+    speed_loop_init(&g_speed_ctx);
+    speed_control_publish_state(&g_speed_ctx);
     return true;
 }
 
@@ -67,7 +111,40 @@ bool speed_control_set_target(int32_t left_rpm, int32_t right_rpm)
     return speed_control_set_target_with_ff(left_rpm, right_rpm, false);
 }
 
-bool speed_control_receive_target(speed_target_msg_t *target)
+void speed_control_step_10ms(void)
+{
+    speed_target_msg_t new_target;
+
+    if (speed_control_receive_target(&new_target)) {
+        g_low_speed_ff_enable = new_target.low_speed_ff_enable;
+        speed_loop_set_target(&g_speed_ctx,
+                              new_target.left_rpm,
+                              new_target.right_rpm);
+    }
+
+    speed_loop_update(&g_speed_ctx, g_low_speed_ff_enable);
+    speed_control_publish_state(&g_speed_ctx);
+}
+
+bool speed_control_get_state(speed_control_state_t *out)
+{
+    if (g_speed_state_queue == NULL || out == NULL ||
+        xQueuePeek(g_speed_state_queue, out, 0) != pdPASS) {
+        return false;
+    }
+    return true;
+}
+
+bool speed_control_wheels_stopped_snapshot(void)
+{
+    speed_control_state_t state = {0};
+    if (!speed_control_get_state(&state)) {
+        return false;
+    }
+    return state.stopped;
+}
+
+static bool speed_control_receive_target(speed_target_msg_t *target)
 {
     if (g_speed_target_queue == NULL || target == NULL) {
         return false;
@@ -75,26 +152,22 @@ bool speed_control_receive_target(speed_target_msg_t *target)
     return (xQueueReceive(g_speed_target_queue, target, 0) == pdPASS);
 }
 
-void speed_control_publish_state(const speed_loop_context_t *ctx)
+static void speed_control_publish_state(const speed_loop_context_t *ctx)
 {
-    if (g_speed_state_queue == NULL) {
+    if (g_speed_state_queue == NULL || ctx == NULL) {
         return;
     }
-    speed_state_t state = { speed_loop_is_wheels_stopped(ctx) };
+
+    speed_control_state_t state = {0};
+    state.left_rpm = ctx->left_rpm;
+    state.right_rpm = ctx->right_rpm;
+    state.left_target_rpm = ctx->left_target_rpm;
+    state.right_target_rpm = ctx->right_target_rpm;
+    state.stopped = speed_loop_is_wheels_stopped(ctx);
     (void)xQueueOverwrite(g_speed_state_queue, &state);
 }
 
-bool speed_control_wheels_stopped_snapshot(void)
-{
-    speed_state_t state = {0};
-    if (g_speed_state_queue == NULL ||
-        xQueuePeek(g_speed_state_queue, &state, 0) != pdPASS) {
-        return false;
-    }
-    return state.wheels_stopped;
-}
-
-void speed_control_pid_init(pid_inc_t *left_pid, pid_inc_t *right_pid)
+static void speed_control_pid_init(pid_inc_t *left_pid, pid_inc_t *right_pid)
 {
     pid_inc_init(left_pid, PID_DEFAULT_KP_MILLI, PID_DEFAULT_KI_MILLI,
                  PID_DEFAULT_KD_MILLI, PID_OUTPUT_MIN, PID_OUTPUT_MAX);
@@ -102,7 +175,7 @@ void speed_control_pid_init(pid_inc_t *left_pid, pid_inc_t *right_pid)
                  PID_DEFAULT_KD_MILLI, PID_OUTPUT_MIN, PID_OUTPUT_MAX);
 }
 
-int32_t speed_control_ramp_step(int32_t current, int32_t target)
+static int32_t speed_control_ramp_step(int32_t current, int32_t target)
 {
     int32_t step = SPEED_RAMP_STEP_RPM;
 
@@ -121,10 +194,10 @@ int32_t speed_control_ramp_step(int32_t current, int32_t target)
     return current;
 }
 
-int32_t speed_control_apply_start_feedforward(int32_t pwm,
-                                              int32_t setpoint_rpm,
-                                              int32_t measured_rpm,
-                                              bool enable)
+static int32_t speed_control_apply_start_feedforward(int32_t pwm,
+                                                     int32_t setpoint_rpm,
+                                                     int32_t measured_rpm,
+                                                     bool enable)
 {
     int32_t ff_pwm = SPEED_START_FF_PWM;
     if (ff_pwm < 0) {
@@ -157,7 +230,7 @@ int32_t speed_control_apply_start_feedforward(int32_t pwm,
     return (sign > 0) ? ff_pwm : -ff_pwm;
 }
 
-void speed_loop_init(speed_loop_context_t *ctx)
+static void speed_loop_init(speed_loop_context_t *ctx)
 {
     if (ctx == NULL) {
         return;
@@ -181,7 +254,9 @@ void speed_loop_init(speed_loop_context_t *ctx)
     encoder_reset();
 }
 
-void speed_loop_set_target(speed_loop_context_t *ctx, int32_t left_rpm, int32_t right_rpm)
+static void speed_loop_set_target(speed_loop_context_t *ctx,
+                                  int32_t left_rpm,
+                                  int32_t right_rpm)
 {
     if (ctx == NULL) {
         return;
@@ -201,7 +276,7 @@ void speed_loop_set_target(speed_loop_context_t *ctx, int32_t left_rpm, int32_t 
     }
 }
 
-void speed_loop_update(speed_loop_context_t *ctx, bool start_ff_enable)
+static void speed_loop_update(speed_loop_context_t *ctx, bool start_ff_enable)
 {
     if (ctx == NULL) {
         return;
@@ -259,7 +334,7 @@ void speed_loop_update(speed_loop_context_t *ctx, bool start_ff_enable)
     }
 }
 
-bool speed_loop_is_wheels_stopped(const speed_loop_context_t *ctx)
+static bool speed_loop_is_wheels_stopped(const speed_loop_context_t *ctx)
 {
     if (ctx == NULL) {
         return true;

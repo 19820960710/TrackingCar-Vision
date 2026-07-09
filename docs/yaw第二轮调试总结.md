@@ -127,7 +127,7 @@ YAW_TARGET_RAMP_STEP_DEG10     150
 当前主线已把控制算法从 `app_tasks.c` 拆出：
 
 - `Component/yaw_control/`：yaw 参数、目标斜坡、位置 PID、到位锁存、重捕获滞回。
-- `Component/speed_control/`：速度环参数、`speed_loop_context_t`、速度目标队列、速度状态队列、低速前馈。
+- `Component/speed_control/`：速度环参数、私有 PID/PWM/滤波上下文、速度目标队列、速度状态快照、低速前馈。
 - `Component/task/app_tasks.c`：仅保留任务、队列胶水、ISR、OLED、对外接口。
 
 速度环和 yaw 环的状态队列已经分离：
