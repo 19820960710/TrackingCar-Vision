@@ -13,7 +13,7 @@
 #include "control/speed_control.h"
 #include "service/attitude_service.h"
 #include "service/yaw_loop_service.h"
-#include "service/yaw_key_service.h"
+#include "service/key_service.h"
 #include "service/app_oled_service.h"
 #include <stdint.h>
 #include <stdbool.h>
@@ -21,6 +21,83 @@
 static TaskHandle_t g_attitude_task_handle = NULL;
 static TaskHandle_t g_yaw_loop_task_handle = NULL;
 static TaskHandle_t g_speed_loop_task_handle = NULL;
+
+
+bool app_tasks_set_wheel_speed_target(int32_t left_rpm, int32_t right_rpm)
+{
+    return speed_control_set_target(left_rpm, right_rpm);
+}
+
+bool app_tasks_set_yaw_target(int32_t base_speed_rpm, int32_t target_yaw_deg10)
+{
+    return yaw_loop_service_set_target(base_speed_rpm, target_yaw_deg10);
+}
+
+int app_tasks_wait_yaw_settled(uint32_t timeout_ms)
+{
+    TickType_t start_tick = xTaskGetTickCount();
+    TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+
+    for (;;) {
+        bool done = yaw_loop_service_is_settled() &&
+                    speed_control_wheels_stopped_snapshot();
+
+        if (done) {
+            return 0;
+        }
+        if (timeout_ms == 0U) {
+            return 1;
+        }
+        if ((xTaskGetTickCount() - start_tick) >= timeout_ticks) {
+            return 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+bool app_tasks_get_attitude(app_attitude_t *out)
+{
+    return attitude_service_get(out);
+}
+
+bool app_tasks_get_wheel_speed(app_wheel_speed_t *out)
+{
+    speed_control_state_t speed_state;
+
+    if (out == NULL || !speed_control_get_state(&speed_state)) {
+        return false;
+    }
+
+    out->left_rpm = speed_state.left_rpm;
+    out->right_rpm = speed_state.right_rpm;
+    out->left_target_rpm = speed_state.left_target_rpm;
+    out->right_target_rpm = speed_state.right_target_rpm;
+    out->stopped = speed_state.stopped;
+    return true;
+}
+
+bool app_tasks_get_yaw_status(app_yaw_status_t *out)
+{
+    return yaw_loop_service_get_status(out);
+}
+
+bool app_tasks_get_vehicle_state(app_vehicle_state_t *out)
+{
+    app_vehicle_state_t snapshot = {0};
+
+    if (out == NULL) {
+        return false;
+    }
+
+    *out = snapshot;
+    out->attitude_available = app_tasks_get_attitude(&out->attitude);
+    out->wheel_speed_available = app_tasks_get_wheel_speed(&out->wheel_speed);
+    out->yaw_status_available = app_tasks_get_yaw_status(&out->yaw);
+    return (out->attitude_available || out->wheel_speed_available ||
+            out->yaw_status_available);
+}
+
+
 
 static void led_task(void *pvParameters)
 {
@@ -100,80 +177,6 @@ static void oled_task(void *pvParameters)
         app_oled_service_update(&oled_ctx);
         vTaskDelay(pdMS_TO_TICKS(200));
     }
-}
-
-bool app_tasks_set_wheel_speed_target(int32_t left_rpm, int32_t right_rpm)
-{
-    return speed_control_set_target(left_rpm, right_rpm);
-}
-
-bool app_tasks_set_yaw_target(int32_t base_speed_rpm, int32_t target_yaw_deg10)
-{
-    return yaw_loop_service_set_target(base_speed_rpm, target_yaw_deg10);
-}
-
-int app_tasks_wait_yaw_settled(uint32_t timeout_ms)
-{
-    TickType_t start_tick = xTaskGetTickCount();
-    TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
-
-    for (;;) {
-        bool done = yaw_loop_service_is_settled() &&
-                    speed_control_wheels_stopped_snapshot();
-
-        if (done) {
-            return 0;
-        }
-        if (timeout_ms == 0U) {
-            return 1;
-        }
-        if ((xTaskGetTickCount() - start_tick) >= timeout_ticks) {
-            return 0;
-        }
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-}
-
-bool app_tasks_get_attitude(app_attitude_t *out)
-{
-    return attitude_service_get(out);
-}
-
-bool app_tasks_get_wheel_speed(app_wheel_speed_t *out)
-{
-    speed_control_state_t speed_state;
-
-    if (out == NULL || !speed_control_get_state(&speed_state)) {
-        return false;
-    }
-
-    out->left_rpm = speed_state.left_rpm;
-    out->right_rpm = speed_state.right_rpm;
-    out->left_target_rpm = speed_state.left_target_rpm;
-    out->right_target_rpm = speed_state.right_target_rpm;
-    out->stopped = speed_state.stopped;
-    return true;
-}
-
-bool app_tasks_get_yaw_status(app_yaw_status_t *out)
-{
-    return yaw_loop_service_get_status(out);
-}
-
-bool app_tasks_get_vehicle_state(app_vehicle_state_t *out)
-{
-    app_vehicle_state_t snapshot = {0};
-
-    if (out == NULL) {
-        return false;
-    }
-
-    *out = snapshot;
-    out->attitude_available = app_tasks_get_attitude(&out->attitude);
-    out->wheel_speed_available = app_tasks_get_wheel_speed(&out->wheel_speed);
-    out->yaw_status_available = app_tasks_get_yaw_status(&out->yaw);
-    return (out->attitude_available || out->wheel_speed_available ||
-            out->yaw_status_available);
 }
 
 void app_tasks_start(void)
