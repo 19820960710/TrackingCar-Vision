@@ -667,6 +667,51 @@
           </Files>
         </Group>
         <Group>
+          <GroupName>Component/service</GroupName>
+          <Files>
+            <File>
+              <FileName>attitude_service.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/service/attitude_service.c</FilePath>
+            </File>
+            <File>
+              <FileName>attitude_service.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/service/attitude_service.h</FilePath>
+            </File>
+            <File>
+              <FileName>yaw_loop_service.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/service/yaw_loop_service.c</FilePath>
+            </File>
+            <File>
+              <FileName>yaw_loop_service.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/service/yaw_loop_service.h</FilePath>
+            </File>
+            <File>
+              <FileName>yaw_key_service.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/service/yaw_key_service.c</FilePath>
+            </File>
+            <File>
+              <FileName>yaw_key_service.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/service/yaw_key_service.h</FilePath>
+            </File>
+            <File>
+              <FileName>app_oled_service.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/service/app_oled_service.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_oled_service.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/service/app_oled_service.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
           <GroupName>Component/task</GroupName>
           <Files>
             <File>
