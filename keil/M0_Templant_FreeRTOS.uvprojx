@@ -664,6 +664,16 @@
               <FileType>5</FileType>
               <FilePath>../Component/control/speed_control.h</FilePath>
             </File>
+            <File>
+              <FileName>speed_loop_core.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/control/speed_loop_core.c</FilePath>
+            </File>
+            <File>
+              <FileName>speed_loop_core.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/control/speed_loop_core.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
