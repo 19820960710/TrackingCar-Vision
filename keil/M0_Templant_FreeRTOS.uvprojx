@@ -655,16 +655,6 @@
               <FilePath>../Component/control/yaw_control.h</FilePath>
             </File>
             <File>
-              <FileName>speed_control.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Component/control/speed_control.c</FilePath>
-            </File>
-            <File>
-              <FileName>speed_control.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>../Component/control/speed_control.h</FilePath>
-            </File>
-            <File>
               <FileName>speed_loop_core.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Component/control/speed_loop_core.c</FilePath>
@@ -698,6 +688,16 @@
               <FileName>yaw_loop_service.h</FileName>
               <FileType>5</FileType>
               <FilePath>../Component/service/yaw_loop_service.h</FilePath>
+            </File>
+            <File>
+              <FileName>speed_service.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/service/speed_service.c</FilePath>
+            </File>
+            <File>
+              <FileName>speed_service.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/service/speed_service.h</FilePath>
             </File>
           </Files>
         </Group>

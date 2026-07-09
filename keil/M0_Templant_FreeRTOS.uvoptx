@@ -822,8 +822,8 @@
       <tvExp>0</tvExp>
       <tvExpOptDlg>0</tvExpOptDlg>
       <bDave2>0</bDave2>
-      <PathWithFileName>../Component/control/speed_control.c</PathWithFileName>
-      <FilenameWithoutPath>speed_control.c</FilenameWithoutPath>
+      <PathWithFileName>../Component/control/speed_loop_core.c</PathWithFileName>
+      <FilenameWithoutPath>speed_loop_core.c</FilenameWithoutPath>
       <RteFlg>0</RteFlg>
       <bShared>0</bShared>
     </File>
@@ -834,8 +834,8 @@
       <tvExp>0</tvExp>
       <tvExpOptDlg>0</tvExpOptDlg>
       <bDave2>0</bDave2>
-      <PathWithFileName>../Component/control/speed_control.h</PathWithFileName>
-      <FilenameWithoutPath>speed_control.h</FilenameWithoutPath>
+      <PathWithFileName>../Component/control/speed_loop_core.h</PathWithFileName>
+      <FilenameWithoutPath>speed_loop_core.h</FilenameWithoutPath>
       <RteFlg>0</RteFlg>
       <bShared>0</bShared>
     </File>
@@ -892,6 +892,30 @@
       <bDave2>0</bDave2>
       <PathWithFileName>../Component/service/yaw_loop_service.h</PathWithFileName>
       <FilenameWithoutPath>yaw_loop_service.h</FilenameWithoutPath>
+      <RteFlg>0</RteFlg>
+      <bShared>0</bShared>
+    </File>
+    <File>
+      <GroupNumber>12</GroupNumber>
+      <FileNumber>51</FileNumber>
+      <FileType>1</FileType>
+      <tvExp>0</tvExp>
+      <tvExpOptDlg>0</tvExpOptDlg>
+      <bDave2>0</bDave2>
+      <PathWithFileName>../Component/service/speed_service.c</PathWithFileName>
+      <FilenameWithoutPath>speed_service.c</FilenameWithoutPath>
+      <RteFlg>0</RteFlg>
+      <bShared>0</bShared>
+    </File>
+    <File>
+      <GroupNumber>12</GroupNumber>
+      <FileNumber>52</FileNumber>
+      <FileType>5</FileType>
+      <tvExp>0</tvExp>
+      <tvExpOptDlg>0</tvExpOptDlg>
+      <bDave2>0</bDave2>
+      <PathWithFileName>../Component/service/speed_service.h</PathWithFileName>
+      <FilenameWithoutPath>speed_service.h</FilenameWithoutPath>
       <RteFlg>0</RteFlg>
       <bShared>0</bShared>
     </File>

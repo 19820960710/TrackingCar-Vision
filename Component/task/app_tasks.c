@@ -12,7 +12,7 @@
 #include "oled/oled.h"
 #include "mpu6050/mpu6050.h"
 #include "encoder/encoder.h"
-#include "control/speed_control.h"
+#include "service/speed_service.h"
 #include "service/attitude_service.h"
 #include "service/yaw_loop_service.h"
 #include <stdint.h>
@@ -29,7 +29,7 @@ static int32_t app_abs_i32(int32_t value)
 
 bool app_tasks_set_wheel_speed_target(int32_t left_rpm, int32_t right_rpm)
 {
-    return speed_control_set_target(left_rpm, right_rpm);
+    return speed_service_set_target(left_rpm, right_rpm);
 }
 
 bool app_tasks_set_yaw_target(int32_t base_speed_rpm, int32_t target_yaw_deg10)
@@ -44,7 +44,7 @@ int app_tasks_wait_yaw_settled(uint32_t timeout_ms)
 
     for (;;) {
         bool done = yaw_loop_service_is_settled() &&
-                    speed_control_wheels_stopped_snapshot();
+                    speed_service_wheels_stopped_snapshot();
 
         if (done) {
             return 0;
@@ -66,9 +66,9 @@ bool app_tasks_get_attitude(app_attitude_t *out)
 
 bool app_tasks_get_wheel_speed(app_wheel_speed_t *out)
 {
-    speed_control_state_t speed_state;
+    speed_service_state_t speed_state;
 
-    if (out == NULL || !speed_control_get_state(&speed_state)) {
+    if (out == NULL || !speed_service_get_state(&speed_state)) {
         return false;
     }
 
@@ -157,7 +157,7 @@ static void speed_loop_task(void *pvParameters)
 
     for (;;) {
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        speed_control_step_10ms();
+        speed_service_step_10ms();
     }
 }
 
@@ -264,7 +264,7 @@ static void oled_task(void *pvParameters)
 void app_tasks_start(void)
 {
     if (!attitude_service_init() || !yaw_loop_service_init() ||
-        !speed_control_init()) {
+        !speed_service_init()) {
         while (1) {}
     }
 

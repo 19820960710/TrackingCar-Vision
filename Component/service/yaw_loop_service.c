@@ -1,7 +1,7 @@
 #include "service/yaw_loop_service.h"
 #include "service/attitude_service.h"
 #include "control/yaw_control.h"
-#include "control/speed_control.h"
+#include "service/speed_service.h"
 #include "FreeRTOS.h"
 #include "queue.h"
 
@@ -74,7 +74,7 @@ static void yaw_loop_update_50ms(yaw_loop_context_t *ctx)
     } else if (!attitude_service_get(&attitude) || !attitude.valid) {
         yaw_control_reset(&ctx->control);
         status->turn_rpm = 0;
-        (void)speed_control_set_target(0, 0);
+        (void)speed_service_set_target(0, 0);
     } else {
         yaw_control_output_t control_out;
 
@@ -92,7 +92,7 @@ static void yaw_loop_update_50ms(yaw_loop_context_t *ctx)
 
         int32_t left_cmd_rpm = target->value.base_speed_rpm - status->turn_rpm;
         int32_t right_cmd_rpm = target->value.base_speed_rpm + status->turn_rpm;
-        (void)speed_control_set_target_with_ff(left_cmd_rpm,
+        (void)speed_service_set_target_with_ff(left_cmd_rpm,
                                                right_cmd_rpm,
                                                control_out.speed_ff_enable);
     }
