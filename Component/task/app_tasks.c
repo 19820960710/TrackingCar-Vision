@@ -115,16 +115,20 @@ static void attitude_task(void *pvParameters)
     (void)pvParameters;
 
     vTaskDelay(pdMS_TO_TICKS(200));
-    if (!attitude_service_begin()) {
+    if (MPU6050_Init() != 0) {
+        attitude_service_publish_invalid();
         for (;;) {
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
     }
 
+    attitude_service_reset();
     (void)ulTaskNotifyTake(pdTRUE, 0);
     for (;;) {
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        attitude_service_process_sample();
+        if (Read_Quad() == 0) {
+            attitude_service_process_sample(pitch, roll, yaw);
+        }
     }
 }
 
