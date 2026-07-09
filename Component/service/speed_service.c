@@ -1,3 +1,13 @@
+/**
+ * @file    speed_service.c
+ * @brief   速度环适配层实现：FreeRTOS 队列 + 编码器读取 + TB6612 输出。
+ *
+ * @details 纯算法在 speed_loop_core 中，本文件负责 RTOS 适配与硬件 I/O：
+ *          - 速度目标/状态队列模块私有；
+ *          - 10ms 读编码器增量，满 50ms 由核心做 PID；
+ *          - 核心 update 返回 true 时输出 PWM 到 TB6612；
+ *          - 目标为 0/0 时核心立即停止并要求制动。
+ */
 #include "service/speed_service.h"
 #include "control/speed_loop_core.h"
 #include "encoder/encoder.h"
@@ -6,63 +16,36 @@
 #include "queue.h"
 #include <stddef.h>
 
+/** 速度目标消息：左右轮目标 RPM + yaw 环专用低速前馈开关。 */
 typedef struct {
     int32_t left_rpm;
     int32_t right_rpm;
     bool low_speed_ff_enable;
 } speed_target_msg_t;
 
-static QueueHandle_t g_speed_target_queue = NULL;
-static QueueHandle_t g_speed_state_queue = NULL;
-static speed_loop_core_t g_speed_core;
-static bool g_low_speed_ff_enable = false;
+static QueueHandle_t g_speed_target_queue = NULL;  /* 目标队列（长度 1，覆盖写） */
+static QueueHandle_t g_speed_state_queue = NULL;   /* 状态队列（长度 1，覆盖写） */
+static speed_loop_core_t g_speed_core;             /* 速度环纯算法核心 */
+static bool g_low_speed_ff_enable = false;         /* 当前是否启用低速前馈 */
 
-static bool speed_service_receive_target(speed_target_msg_t *target)
-{
-    if (g_speed_target_queue == NULL || target == NULL) {
-        return false;
-    }
-    return (xQueueReceive(g_speed_target_queue, target, 0) == pdPASS);
-}
-
-static void speed_service_publish_output(const speed_loop_core_output_t *output)
-{
-    if (g_speed_state_queue == NULL || output == NULL) {
-        return;
-    }
-
-    speed_service_state_t state = {0};
-    state.left_rpm = output->left_rpm;
-    state.right_rpm = output->right_rpm;
-    state.left_target_rpm = output->left_target_rpm;
-    state.right_target_rpm = output->right_target_rpm;
-    state.stopped = output->stopped;
-    (void)xQueueOverwrite(g_speed_state_queue, &state);
-}
-
+/* 从速度环核心取当前输出并发布状态快照到队列。 */
 static void speed_service_publish_snapshot(void)
 {
     speed_loop_core_output_t output = {0};
     speed_loop_core_get_output(&g_speed_core, &output);
-    speed_service_publish_output(&output);
-}
 
-static void speed_service_apply_motor_output(const speed_loop_core_output_t *output)
-{
-    if (output == NULL) {
-        return;
-    }
-
-    if (output->brake) {
-        tb6612_brake();
-    } else {
-        tb6612_set_speed((int16_t)output->right_pwm,
-                         (int16_t)output->left_pwm);
-    }
+    speed_service_state_t state = {0};
+    state.left_rpm = output.left_rpm;
+    state.right_rpm = output.right_rpm;
+    state.left_target_rpm = output.left_target_rpm;
+    state.right_target_rpm = output.right_target_rpm;
+    state.stopped = output.stopped;
+    (void)xQueueOverwrite(g_speed_state_queue, &state);
 }
 
 bool speed_service_init(void)
 {
+    /* 创建目标/状态队列（长度 1，覆盖写，只保留最新值）。 */
     if (g_speed_target_queue == NULL) {
         g_speed_target_queue = xQueueCreate(1, sizeof(speed_target_msg_t));
     }
@@ -76,7 +59,7 @@ bool speed_service_init(void)
     g_low_speed_ff_enable = false;
     speed_loop_core_init(&g_speed_core);
     encoder_reset();
-    speed_service_publish_snapshot();
+    speed_service_publish_snapshot();   /* 发布初始停稳快照 */
     return true;
 }
 
@@ -95,6 +78,7 @@ bool speed_service_set_target_with_ff(int32_t left_rpm,
     return (xQueueOverwrite(g_speed_target_queue, &target) == pdPASS);
 }
 
+/* 应用层公开接口：默认不启用 yaw 专用低速前馈。 */
 bool speed_service_set_target(int32_t left_rpm, int32_t right_rpm)
 {
     return speed_service_set_target_with_ff(left_rpm, right_rpm, false);
@@ -102,10 +86,10 @@ bool speed_service_set_target(int32_t left_rpm, int32_t right_rpm)
 
 void speed_service_step_10ms(void)
 {
+    /* 取最新速度目标；收到 0/0 时核心会立即停止并要求制动。 */
     speed_target_msg_t new_target;
-    speed_loop_core_output_t output = {0};
-
-    if (speed_service_receive_target(&new_target)) {
+    if (g_speed_target_queue != NULL &&
+        xQueueReceive(g_speed_target_queue, &new_target, 0) == pdPASS) {
         g_low_speed_ff_enable = new_target.low_speed_ff_enable;
         if (speed_loop_core_set_target(&g_speed_core,
                                        new_target.left_rpm,
@@ -115,9 +99,11 @@ void speed_service_step_10ms(void)
         }
     }
 
+    /* 10ms 编码器采样，核心内部累计到 50ms 才做 PID。 */
     encoder_data_t encoder;
     encoder_get_data(&encoder);
 
+    speed_loop_core_output_t output = {0};
     if (speed_loop_core_update(&g_speed_core,
                                encoder.left_delta,
                                encoder.right_delta,
@@ -125,7 +111,12 @@ void speed_service_step_10ms(void)
                                ENCODER_COUNTS_PER_REV,
                                g_low_speed_ff_enable,
                                &output)) {
-        speed_service_apply_motor_output(&output);
+        if (output.brake) {
+            tb6612_brake();
+        } else {
+            tb6612_set_speed((int16_t)output.right_pwm,
+                             (int16_t)output.left_pwm);
+        }
     }
 
     speed_service_publish_snapshot();
