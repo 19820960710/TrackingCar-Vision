@@ -145,8 +145,42 @@ void pid_pos_reset(pid_pos_t *pid);
  * @param  pid  控制器指针
  * @param  err  当前误差，例如 yaw_error_deg10
  * @return 限幅后的输出值
+ * @note   内部自动计算积分项 (integral += ki * err)，适合常规闭环。
+ *         对于需要积分分离/动态限幅等扩展策略的场景，使用
+ *         pid_pos_compute_with_integral() + getter/setter 自行管理积分。
  */
 int32_t pid_pos_compute_error(pid_pos_t *pid, int32_t err);
+
+/**
+ * @brief  接受外部积分项，执行位置式 PID 的 P + D + 限幅 + 状态维护
+ * @param  pid              控制器指针
+ * @param  err              当前误差
+ * @param  integral_milli   外部预计算的积分项 ×1000（调用方自行做分离/衰减/限幅）
+ * @param  derr_out         输出：本周期误差变化（NULL=不需要），首周期返回 0
+ * @return 限幅后的输出值
+ * @note   本函数不修改 pid->integral_milli，调用方通过 getter/setter 管理积分。
+ *         更新 pid->output / pid->last_err / pid->first_run。
+ */
+int32_t pid_pos_compute_with_integral(pid_pos_t *pid,
+                                       int32_t err,
+                                       int32_t integral_milli,
+                                       int32_t *derr_out);
+
+/**
+ * @brief  获取/设置 积分项 (milli)，供外部策略（如 yaw 积分分离）读写
+ */
+int32_t pid_pos_get_integral_milli(const pid_pos_t *pid);
+void    pid_pos_set_integral_milli(pid_pos_t *pid, int32_t integral_milli);
+
+/**
+ * @brief  获取 积分系数 / 输出上限，供外部策略做条件判断
+ */
+int32_t pid_pos_get_ki_milli(const pid_pos_t *pid);
+int32_t pid_pos_get_out_max(const pid_pos_t *pid);
+
+/** @brief 计算 derr + 处理 first_run，供策略层提前获取误差变化。
+ *   @return 首周期 0，之后为 err - last_err。内部推进 first_run 状态。 */
+int32_t pid_pos_get_derr_start(pid_pos_t *pid, int32_t err);
 
 /**
  * @brief  获取位置式 PID 当前输出值

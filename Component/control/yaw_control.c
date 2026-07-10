@@ -20,12 +20,12 @@
  * ═══════════════════════════════════════════════════════════════════════════ */
 #define YAW_LOOP_PERIOD_MS             50
 #define YAW_PID_DEFAULT_KP_MILLI       120
-#define YAW_PID_DEFAULT_KI_MILLI       5
-#define YAW_PID_DEFAULT_KD_MILLI       170
+#define YAW_PID_DEFAULT_KI_MILLI       2
+#define YAW_PID_DEFAULT_KD_MILLI       200
 #define YAW_PID_OUTPUT_LIMIT_RPM       200
 #define YAW_DYNAMIC_CAP_BASE_RPM       18
 #define YAW_DYNAMIC_CAP_ERR_DIV        14
-#define YAW_MIN_TURN_RPM               7    /* 死区外给一次明确修正，避免小碎步 */
+#define YAW_MIN_TURN_RPM               15    /* 死区外给一次明确修正，避免小碎步 */
 #define YAW_DEADBAND_DEG10             12   /* 1.2° 内认为到位 */
 #define YAW_REACQUIRE_DEG10            20   /* 到位后需超过 2.0° 才重新修正 */
 #define YAW_REACQUIRE_CONFIRM_COUNT    2U   /* 连续 2 个 yaw 周期超出阈值才重捕获 */
@@ -47,15 +47,6 @@ static int32_t clamp_i32(int32_t value, int32_t min_value, int32_t max_value)
         return min_value;
     }
     return value;
-}
-
-/* 千倍整数转普通整数（四舍五入）。 */
-static int32_t milli_to_i32_round(int32_t value_milli)
-{
-    if (value_milli >= 0) {
-        return (value_milli + 500) / 1000;
-    }
-    return (value_milli - 500) / 1000;
 }
 
 int32_t yaw_normalize_deg10(int32_t angle_deg10)
@@ -189,13 +180,8 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
         return 0;
     }
 
-    /* 计算误差变化 derr（首周期为 0）。 */
-    int32_t derr = 0;
-    if (pid->first_run) {
-        pid->first_run = 0U;
-    } else {
-        derr = err_deg10 - pid->last_err;
-    }
+    /* 计算误差变化 derr：委托 pid.c 处理 first_run。 */
+    int32_t derr = pid_pos_get_derr_start(pid, err_deg10);
     if (derr_out != 0) {
         *derr_out = derr;
     }
@@ -210,48 +196,43 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
             abs_err <= YAW_APPROACH_BRAKE_ZONE_DEG10;
     }
 
-    /* 积分分离：izone 内才积分，否则衰减；接近制动时也衰减，减少超调。 */
-    if (abs_err <= izone && pid->ki_milli != 0) {
-        int64_t next_integral = (int64_t)pid->integral_milli +
-                                (int64_t)pid->ki_milli * err_deg10;
+    /* 积分分离：izone 内才积分，否则衰减；接近制动时也衰减，减少超调。
+     * 积分项通过 pid.c 的 getter/setter 管理，不再裸读写 pid_pos_t 内部字段。 */
+    int32_t ki = pid_pos_get_ki_milli(pid);
+    int32_t integral = pid_pos_get_integral_milli(pid);
+    if (abs_err <= izone && ki != 0) {
+        int64_t next_integral = (int64_t)integral +
+                                (int64_t)ki * err_deg10;
         int32_t int_limit_milli = ilimit * 1000;
         if (next_integral > int_limit_milli) {
-            pid->integral_milli = int_limit_milli;
+            pid_pos_set_integral_milli(pid, int_limit_milli);
         } else if (next_integral < -int_limit_milli) {
-            pid->integral_milli = -int_limit_milli;
+            pid_pos_set_integral_milli(pid, -int_limit_milli);
         } else {
-            pid->integral_milli = (int32_t)next_integral;
+            pid_pos_set_integral_milli(pid, (int32_t)next_integral);
         }
     } else {
-        pid->integral_milli /= 2;
+        pid_pos_set_integral_milli(pid, integral / 2);
     }
     if (approaching_fast && abs_err <= YAW_APPROACH_BRAKE_ZONE_DEG10) {
-        pid->integral_milli /= 2;
+        int32_t decayed = pid_pos_get_integral_milli(pid);
+        pid_pos_set_integral_milli(pid, decayed / 2);
     }
 
-    /* PID 输出（千倍整数累加后限幅）。 */
-    int64_t output_milli = 0;
-    output_milli += (int64_t)pid->kp_milli * err_deg10;
-    output_milli += pid->integral_milli;
-    output_milli += (int64_t)pid->kd_milli * derr;
-
-    int32_t out_min_milli = pid->out_min * 1000;
-    int32_t out_max_milli = pid->out_max * 1000;
-    if (output_milli > out_max_milli) {
-        output_milli = out_max_milli;
-    } else if (output_milli < out_min_milli) {
-        output_milli = out_min_milli;
-    }
+    /* PID 核心计算：P + D + 限幅 → 委托 pid.c，积分项由本函数准备后传入。 */
+    int32_t output = pid_pos_compute_with_integral(pid,
+                                                    err_deg10,
+                                                    pid_pos_get_integral_milli(pid),
+                                                    0);
 
     /* 动态限幅：误差越大允许越大输出，但不低于最小修正。 */
-    int32_t output = milli_to_i32_round((int32_t)output_milli);
     int32_t dynamic_limit = YAW_DYNAMIC_CAP_BASE_RPM +
                             (abs_err / YAW_DYNAMIC_CAP_ERR_DIV);
     if (dynamic_limit < min_turn) {
         dynamic_limit = min_turn;
     }
-    if (dynamic_limit > pid->out_max) {
-        dynamic_limit = pid->out_max;
+    if (dynamic_limit > pid_pos_get_out_max(pid)) {
+        dynamic_limit = pid_pos_get_out_max(pid);
     }
     output = clamp_i32(output, -dynamic_limit, dynamic_limit);
 
@@ -277,7 +258,6 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
 
     output = clamp_i32(output, pid->out_min, pid->out_max);
     pid->output = output;
-    pid->last_err = err_deg10;
     return output;
 }
 

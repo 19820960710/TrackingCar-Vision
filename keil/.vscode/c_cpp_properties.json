@@ -18,6 +18,7 @@
                 "c:\\Users\\iwiwb\\Desktop\\My_M0_Proj\\M0_Templant_FreeRTOS\\Component\\pid",
                 "c:\\Users\\iwiwb\\Desktop\\My_M0_Proj\\M0_Templant_FreeRTOS\\Component\\control",
                 "c:\\Users\\iwiwb\\Desktop\\My_M0_Proj\\M0_Templant_FreeRTOS\\Component\\service",
+                "c:\\Users\\iwiwb\\Desktop\\My_M0_Proj\\M0_Templant_FreeRTOS\\Component\\common",
                 "c:\\Users\\iwiwb\\Desktop\\My_M0_Proj\\M0_Templant_FreeRTOS\\Component\\task"
             ],
             "defines": [

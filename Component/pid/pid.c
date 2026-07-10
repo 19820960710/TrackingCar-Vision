@@ -305,13 +305,7 @@ int32_t pid_pos_compute_error(pid_pos_t *pid, int32_t err)
         return 0;
     }
 
-    int32_t derr = 0;
-    if (pid->first_run) {
-        pid->first_run = 0U;
-    } else {
-        derr = err - pid->last_err;
-    }
-
+    /* 内部积分：ki * err 累加到 integral_milli，再做 anti-windup 限幅。 */
     int64_t next_integral = (int64_t)pid->integral_milli +
                             (int64_t)pid->ki_milli * err;
     int32_t min_milli = pid->out_min * 1000;
@@ -325,9 +319,35 @@ int32_t pid_pos_compute_error(pid_pos_t *pid, int32_t err)
         pid->integral_milli = (int32_t)next_integral;
     }
 
+    return pid_pos_compute_with_integral(pid, err, pid->integral_milli, 0);
+}
+
+int32_t pid_pos_compute_with_integral(pid_pos_t *pid,
+                                       int32_t err,
+                                       int32_t integral_milli,
+                                       int32_t *derr_out)
+{
+    if (pid == 0) {
+        return 0;
+    }
+
+    /* 误差变化（首周期为 0，避免 D 项突变）。 */
+    int32_t derr = 0;
+    if (pid->first_run) {
+        pid->first_run = 0U;
+    } else {
+        derr = err - pid->last_err;
+    }
+    if (derr_out != 0) {
+        *derr_out = derr;
+    }
+
+    int32_t min_milli = pid->out_min * 1000;
+    int32_t max_milli = pid->out_max * 1000;
+
     int64_t output_milli = 0;
     output_milli += (int64_t)pid->kp_milli * err;
-    output_milli += pid->integral_milli;
+    output_milli += integral_milli;
     output_milli += (int64_t)pid->kd_milli * derr;
 
     if (output_milli > max_milli) {
@@ -341,6 +361,42 @@ int32_t pid_pos_compute_error(pid_pos_t *pid, int32_t err)
     pid->last_err = err;
 
     return pid->output;
+}
+
+int32_t pid_pos_get_integral_milli(const pid_pos_t *pid)
+{
+    return (pid == 0) ? 0 : pid->integral_milli;
+}
+
+void pid_pos_set_integral_milli(pid_pos_t *pid, int32_t integral_milli)
+{
+    if (pid != 0) {
+        pid->integral_milli = integral_milli;
+    }
+}
+
+int32_t pid_pos_get_ki_milli(const pid_pos_t *pid)
+{
+    return (pid == 0) ? 0 : pid->ki_milli;
+}
+
+int32_t pid_pos_get_out_max(const pid_pos_t *pid)
+{
+    return (pid == 0) ? 0 : pid->out_max;
+}
+
+int32_t pid_pos_get_derr_start(pid_pos_t *pid, int32_t err)
+{
+    if (pid == 0) {
+        return 0;
+    }
+
+    if (pid->first_run) {
+        pid->first_run = 0U;
+        return 0;
+    }
+
+    return err - pid->last_err;
 }
 
 int32_t pid_pos_get_output(const pid_pos_t *pid)

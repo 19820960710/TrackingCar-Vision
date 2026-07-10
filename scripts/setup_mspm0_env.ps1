@@ -13,6 +13,7 @@ $SyscfgFile = Join-Path $ProjectRoot 'main.syscfg'
 
 function Read-PathOrDefault([string]$Prompt, [string[]]$Candidates) {
     foreach ($candidate in $Candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
         $c = $candidate.Trim('"', ' ', "`t")
         if ([string]::IsNullOrWhiteSpace($c)) { continue }
         if (Test-Path $c) {

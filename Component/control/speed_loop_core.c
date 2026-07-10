@@ -18,7 +18,7 @@
 #define PID_OUTPUT_MIN                   (-80) /* PWM 输出下限 */
 #define PID_OUTPUT_MAX                   (80)  /* PWM 输出上限 */
 #define SPEED_RAMP_STEP_RPM              100   /* 每周期斜坡步长 RPM */
-#define SPEED_START_FF_PWM               18    /* 低速启动前馈 PWM */
+#define SPEED_START_FF_PWM               30    /* 低速启动前馈 PWM */
 #define SPEED_START_FF_SETPOINT_RPM      90    /* 超过该设定点不启用前馈 */
 #define SPEED_START_FF_ERR_RPM           2     /* 误差小于该值不启用前馈 */
 #define SPEED_START_FF_MIN_SETPOINT_RPM  4     /* 低于该设定点不启用前馈 */
