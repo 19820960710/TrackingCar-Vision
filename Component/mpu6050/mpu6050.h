@@ -13,11 +13,12 @@
  *
  * ── 使用说明 ──
  * @code
- *   MPU6050_IntEnable();       // 使能 INT 中断
- *   int ret = MPU6050_Init();  // 初始化传感器 + DMP
+ *   MPU6050_IntEnable();           // 使能 INT 中断
+ *   int ret = MPU6050_Init();      // 初始化传感器 + DMP
  *   if (ret == 0) {
- *       Read_Quad();           // 读取并转换为欧拉角
- *       // 使用全局变量: pitch, roll, yaw (单位: °)
+ *       mpu_attitude_t att;
+ *       Read_Quad(&att);           // 读取并转换为欧拉角
+ *       // att.pitch / att.roll / att.yaw (单位: °)
  *   }
  * @endcode
  */
@@ -25,20 +26,14 @@
 #ifndef _MPU6050_H_
 #define _MPU6050_H_
 
-/** @brief 原始陀螺仪数据 (DMP FIFO 输出) */
-extern short gyro[3];
-
-/** @brief 原始加速度计数据 (DMP FIFO 输出) */
-extern short accel[3];
-
-/** @brief 俯仰角 (°), Read_Quad() 后更新 */
-extern float pitch;
-
-/** @brief 横滚角 (°), Read_Quad() 后更新 */
-extern float roll;
-
-/** @brief 偏航角 (°), Read_Quad() 后更新 */
-extern float yaw;
+/**
+ * @brief 欧拉角姿态输出 (单位: °)
+ * @note  Read_Quad() 成功返回 0 时填充。Z-Y-X 旋转顺序。 */
+typedef struct {
+    float pitch;   /**< 俯仰角 (°) */
+    float roll;    /**< 横滚角 (°) */
+    float yaw;     /**< 偏航角 (°) */
+} mpu_attitude_t;
 
 /**
  * @brief  初始化 MPU6050 + 加载 DMP 固件
@@ -55,12 +50,12 @@ int MPU6050_Init(void);
 int MPU6050_IsReady(void);
 
 /**
- * @brief  读取 DMP FIFO → 更新四元数 + 欧拉角
+ * @brief  读取 DMP FIFO → 四元数 → 欧拉角，写入 out
+ * @param  out  姿态输出指针（不可为 NULL，成功时填充）
  * @return 0=成功, -1=FIFO 读取错误, -2=传感器未就绪
- * @note   更新全局变量: pitch, roll, yaw, gyro[3], accel[3], quat[4]
- *         需在中断上下文中调用 (被 GROUP1_IRQHandler 触发)
+ * @note   需在中断上下文中调用 (被 GROUP1_IRQHandler 触发)
  */
-int Read_Quad(void);
+int Read_Quad(mpu_attitude_t *out);
 
 /**
  * @brief  使能 MPU6050 INT 引脚中断 (下降沿)

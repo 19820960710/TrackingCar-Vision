@@ -75,6 +75,14 @@ void encoder_reset(void);
 void encoder_get_data(encoder_data_t *data);
 
 /**
+ * @brief  编码器增量换算为 RPM×10
+ * @param  delta      编码器脉冲增量
+ * @param  period_ms  累计周期 (ms)
+ * @return RPM×10，使用整数运算避免浮点
+ */
+int32_t encoder_delta_to_rpm10(int32_t delta, uint32_t period_ms);
+
+/**
  * @brief  检查右轮编码器 GPIO 中断是否待处理
  * @return 非 0 = 有中断待处理, 0 = 无
  * @note   用于 GROUP1_IRQHandler 中断分发
