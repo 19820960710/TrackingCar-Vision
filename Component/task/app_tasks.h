@@ -40,6 +40,8 @@ typedef struct {
     int32_t turn_rpm;
     bool enabled;
     bool settled;
+    bool speed_ff_enable;   /**< true=请求速度环启用 yaw 专用低速前馈 */
+    bool attitude_valid;    /**< true=本控制周期姿态可用（失效时由上层安全停车） */
 } app_yaw_status_t;
 
 /** @brief 应用层聚合状态快照。 */

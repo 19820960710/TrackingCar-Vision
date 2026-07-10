@@ -642,32 +642,72 @@
           </Files>
         </Group>
         <Group>
-          <GroupName>Component/yaw_control</GroupName>
+          <GroupName>Component/control</GroupName>
           <Files>
             <File>
               <FileName>yaw_control.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../Component/yaw_control/yaw_control.c</FilePath>
+              <FilePath>../Component/control/yaw_control.c</FilePath>
             </File>
             <File>
               <FileName>yaw_control.h</FileName>
               <FileType>5</FileType>
-              <FilePath>../Component/yaw_control/yaw_control.h</FilePath>
+              <FilePath>../Component/control/yaw_control.h</FilePath>
+            </File>
+            <File>
+              <FileName>speed_loop_core.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/control/speed_loop_core.c</FilePath>
+            </File>
+            <File>
+              <FileName>speed_loop_core.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/control/speed_loop_core.h</FilePath>
             </File>
           </Files>
         </Group>
         <Group>
-          <GroupName>Component/speed_control</GroupName>
+          <GroupName>Component/service</GroupName>
           <Files>
             <File>
-              <FileName>speed_control.c</FileName>
+              <FileName>attitude_service.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../Component/speed_control/speed_control.c</FilePath>
+              <FilePath>../Component/service/attitude_service.c</FilePath>
             </File>
             <File>
-              <FileName>speed_control.h</FileName>
+              <FileName>attitude_service.h</FileName>
               <FileType>5</FileType>
-              <FilePath>../Component/speed_control/speed_control.h</FilePath>
+              <FilePath>../Component/service/attitude_service.h</FilePath>
+            </File>
+            <File>
+              <FileName>yaw_loop_service.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/service/yaw_loop_service.c</FilePath>
+            </File>
+            <File>
+              <FileName>yaw_loop_service.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/service/yaw_loop_service.h</FilePath>
+            </File>
+            <File>
+              <FileName>speed_service.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/service/speed_service.c</FilePath>
+            </File>
+            <File>
+              <FileName>speed_service.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/service/speed_service.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Component/common</GroupName>
+          <Files>
+            <File>
+              <FileName>util.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/common/util.h</FilePath>
             </File>
           </Files>
         </Group>

@@ -21,7 +21,7 @@
  *
  *   ── 欧拉角转换 ──
  *   四元数 (q30 格式, 2^30 = 1.0) → pitch/roll/yaw (单位: °)
- *   转换存储在全局变量 pitch/roll/yaw 中, 供外部读取
+ *   转换通过 Read_Quad() 的 out 参数返回, 不再使用全局变量
  *
  *   ── SysConfig 配置要求 ──
  *   I2C: 命名为 "I2C_MPU6050", 使能 Controller Mode, Fast Mode (400kHz)
@@ -114,17 +114,15 @@ struct hal_s {
 };
 static struct hal_s hal = {0};
 
-/* ── 全局传感器数据 (DMP 填充) ── */
-unsigned long sensor_timestamp;  /* 传感器时间戳 */
-short gyro[3], accel[3], sensors; /* 陀螺/加速度/传感器状态 */
-unsigned char more;               /* FIFO 中是否还有数据 */
-long quat[4];                     /* 四元数 (q30 格式: 2^30 = 1.0) */
+/* ── 驱动内部状态 (DMP FIFO 缓冲, 不对外导出) ── */
+static unsigned long sensor_timestamp;  /* 传感器时间戳 */
+static short gyro[3], accel[3];          /* 陀螺/加速度原始数据 */
+static short sensors;                    /* 传感器状态 */
+static unsigned char more;               /* FIFO 中是否还有数据 */
+static long quat[4];                     /* 四元数 (q30 格式: 2^30 = 1.0) */
 
 /** @brief Q30 格式缩放因子: 2^30 = 1073741824 (四元数归一化系数) */
 #define q30  (1073741824.0f)
-
-/** @brief 全局欧拉角输出 (°), 由 Read_Quad() 更新 */
-float pitch, roll, yaw;
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  传感器方向矩阵
@@ -376,15 +374,18 @@ void MPU6050_IntClear(void)
  *           yaw   = atan2(2*(q1*q2 + q0*q3), q0² + q1² - q2² - q3²) * 57.3
  *         57.3 = 180/π (弧度 → 度)
  *
- *         全局变量更新:
+ *         输出 (填充到 out):
  *           pitch, roll, yaw: 欧拉角 (°)
+ *         驱动内部缓冲 (不对外导出):
  *           gyro[3], accel[3]: 原始传感器数据
  *           quat[4]: 四元数 (q30 格式)
  */
-int Read_Quad(void)
+int Read_Quad(mpu_attitude_t *out)
 {
     int result;
 
+    if (out == 0)
+        return -1;
     if (!g_mpu6050_ready)
         return -2;  /* MPU6050 未初始化, 直接返回 */
 
@@ -409,11 +410,11 @@ int Read_Quad(void)
     /* ── 四元数 → 欧拉角 (Z-Y-X 旋转顺序) ──
      * 单位四元数: q0² + q1² + q2² + q3² = 1
      * 转换公式来源于旋转矩阵的反正切提取 */
-    pitch = asin(-2 * q1 * q3 + 2 * q0 * q2) * 57.3;  /* 俯仰角 */
-    roll  = atan2(2 * q2 * q3 + 2 * q0 * q1,
-                  -2 * q1 * q1 - 2 * q2 * q2 + 1) * 57.3; /* 横滚角 */
-    yaw   = atan2(2 * (q1 * q2 + q0 * q3),
-                  q0 * q0 + q1 * q1 - q2 * q2 - q3 * q3) * 57.3; /* 偏航角 */
+    out->pitch = asin(-2 * q1 * q3 + 2 * q0 * q2) * 57.3;  /* 俯仰角 */
+    out->roll  = atan2(2 * q2 * q3 + 2 * q0 * q1,
+                      -2 * q1 * q1 - 2 * q2 * q2 + 1) * 57.3; /* 横滚角 */
+    out->yaw   = atan2(2 * (q1 * q2 + q0 * q3),
+                      q0 * q0 + q1 * q1 - q2 * q2 - q3 * q3) * 57.3; /* 偏航角 */
 
     return 0;
 }
