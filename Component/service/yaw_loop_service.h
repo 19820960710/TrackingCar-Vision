@@ -16,8 +16,9 @@
 /** 初始化 yaw 环：创建目标/状态队列，初始化控制器并写入初始状态。成功返回 true。 */
 bool yaw_loop_service_init(void);
 
-/** 10ms 节拍入口：取最新目标 + 5 分频，每 50ms 执行一次 yaw 控制并下发轮速。 */
-void yaw_loop_service_step_10ms(void);
+/** 10ms 节拍入口：取最新目标 + 5 分频，每 50ms 执行一次 yaw 控制。
+ *  返回 true 表示本周期完成了 50ms yaw 控制（base/turn/ff 已写入状态）。 */
+bool yaw_loop_service_step_10ms(void);
 
 /** 设置 yaw 闭环目标（基准速度 + 目标角×10），立即更新状态快照。 */
 bool yaw_loop_service_set_target(int32_t base_speed_rpm,

@@ -3,14 +3,14 @@
  * @brief   yaw 角闭环 service 层实现：目标/状态队列与串级 step 逻辑。
  *
  * @details 每 10ms 由 yaw_loop_task 唤醒，内部 5 分频，每 50ms 执行一次
- *          yaw_control_update()，输出 turn_rpm 经差速换算后下发到 speed_service。
- *          yaw 先更新目标并下发轮速，再由任务层通知速度环执行，保证时序。
+ *          yaw_control_update()，将 base_speed/turn_rpm/前馈/姿态状态写入快照。
+ *          本模块只做 yaw 环计算，不再直接调用 speed_service：差速换算与速度环
+ *          下发交由 app_tasks 胶水层完成，从而 yaw 与 speed 两个环可独立使用/调试。
  *          目标/状态队列模块私有，外部通过 setter/getter 访问。
  */
 #include "service/yaw_loop_service.h"
 #include "service/attitude_service.h"
 #include "control/yaw_control.h"
-#include "service/speed_service.h"
 #include "FreeRTOS.h"
 #include "queue.h"
 
@@ -49,18 +49,19 @@ static void yaw_loop_update_50ms(yaw_loop_context_t *ctx)
     status->target_yaw_deg10 = target->value.target_yaw_deg10;
     status->enabled = target->enabled;
     status->settled = false;
+    status->speed_ff_enable = false;
+    status->attitude_valid = false;
 
     if (!target->enabled) {
-        /* 未使能：复位控制器，不输出转向。 */
+        /* 未使能：复位控制器，不输出转向；不干预速度环（交上层）。 */
         yaw_control_reset(&ctx->control);
         status->turn_rpm = 0;
     } else if (!attitude_service_get(&attitude) || !attitude.valid) {
-        /* 姿态不可用（MPU 未稳定/失效）：复位控制器并停车保安全。 */
+        /* 姿态不可用（MPU 未稳定/失效）：复位控制器，交上层安全停车。 */
         yaw_control_reset(&ctx->control);
         status->turn_rpm = 0;
-        (void)speed_service_set_target(0, 0);
     } else {
-        /* 正常闭环：计算 yaw PID 并差速下发。 */
+        /* 正常闭环：计算 yaw PID，输出 base/turn/前馈写入快照。 */
         yaw_control_output_t control_out;
 
         status->current_yaw_deg10 = yaw_normalize_deg10(attitude.yaw_deg10);
@@ -74,13 +75,8 @@ static void yaw_loop_update_50ms(yaw_loop_context_t *ctx)
 
         status->turn_rpm = control_out.turn_rpm;
         status->settled = control_out.settled;
-
-        /* 差速换算：左轮减、右轮加 turn_rpm；实测方向正确。 */
-        int32_t left_cmd_rpm = target->value.base_speed_rpm - status->turn_rpm;
-        int32_t right_cmd_rpm = target->value.base_speed_rpm + status->turn_rpm;
-        (void)speed_service_set_target_with_ff(left_cmd_rpm,
-                                               right_cmd_rpm,
-                                               control_out.speed_ff_enable);
+        status->speed_ff_enable = control_out.speed_ff_enable;
+        status->attitude_valid = true;
     }
 
     (void)xQueueOverwrite(g_yaw_state_queue, status);
@@ -113,7 +109,7 @@ bool yaw_loop_service_init(void)
     return true;
 }
 
-void yaw_loop_service_step_10ms(void)
+bool yaw_loop_service_step_10ms(void)
 {
     yaw_loop_context_t *ctx = &g_yaw_ctx;
 
@@ -126,11 +122,12 @@ void yaw_loop_service_step_10ms(void)
     /* 10ms 节拍，每 5 次（50ms）才执行一次 yaw 控制。 */
     ctx->tick_divider++;
     if (ctx->tick_divider < YAW_LOOP_DIVIDER) {
-        return;
+        return false;
     }
     ctx->tick_divider = 0;
 
     yaw_loop_update_50ms(ctx);
+    return true;
 }
 
 bool yaw_loop_service_set_target(int32_t base_speed_rpm,

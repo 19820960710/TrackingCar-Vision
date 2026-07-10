@@ -28,6 +28,7 @@
 #include "service/speed_service.h"
 #include "service/attitude_service.h"
 #include "service/yaw_loop_service.h"
+#include "common/util.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -37,12 +38,6 @@
 static TaskHandle_t g_attitude_task_handle = NULL;   /* MPU6050 INT 数据就绪通知 */
 static TaskHandle_t g_yaw_loop_task_handle = NULL;    /* TIMER_0 10ms 节拍通知 */
 static TaskHandle_t g_speed_loop_task_handle = NULL;  /* 由 yaw_loop_task 通知 */
-
-/* 取绝对值；OLED 显示角度/速度时用于符号与数值分离。 */
-static int32_t app_abs_i32(int32_t value)
-{
-    return (value < 0) ? -value : value;
-}
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  对外控制 API：转发到 service 层，不启用 yaw 专用低速前馈。
@@ -172,9 +167,10 @@ static void attitude_task(void *pvParameters)
     for (;;) {
         /* 阻塞等待 PB4 中断发出的数据就绪通知。 */
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        if (Read_Quad() == 0) {
-            /* pitch/roll/yaw 为 Read_Quad 输出的全局变量。 */
-            attitude_service_process_sample(pitch, roll, yaw);
+        mpu_attitude_t att;
+        if (Read_Quad(&att) == 0) {
+            /* att 为 Read_Quad 结构体输出，替代旧的全局变量。 */
+            attitude_service_process_sample(att.pitch, att.roll, att.yaw);
         }
     }
 }
@@ -187,7 +183,28 @@ static void yaw_loop_task(void *pvParameters)
 
     for (;;) {
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        yaw_loop_service_step_10ms();
+
+        /* yaw 环内部 5 分频，每 50ms 执行一次 yaw PID。
+         * yaw 环只输出 base_speed + turn_rpm + 前馈/姿态状态，
+         * 差速换算与速度环下发交由本胶水层完成，保证 yaw/speed 两环可独立使用。 */
+        bool control_ran = yaw_loop_service_step_10ms();
+
+        if (control_ran) {
+            app_yaw_status_t yaw = {0};
+            if (yaw_loop_service_get_status(&yaw) && yaw.enabled) {
+                if (!yaw.attitude_valid) {
+                    /* 姿态失效：安全停车。 */
+                    (void)speed_service_set_target(0, 0);
+                } else {
+                    /* 差速换算：左轮减 turn_rpm、右轮加 turn_rpm；实测方向正确。 */
+                    int32_t left_cmd_rpm = yaw.base_speed_rpm - yaw.turn_rpm;
+                    int32_t right_cmd_rpm = yaw.base_speed_rpm + yaw.turn_rpm;
+                    (void)speed_service_set_target_with_ff(left_cmd_rpm,
+                                                           right_cmd_rpm,
+                                                           yaw.speed_ff_enable);
+                }
+            }
+        }
 
         /* 每次被唤醒都通知速度环，速度环内部自行分频 50ms。 */
         if (g_speed_loop_task_handle != NULL) {
@@ -250,7 +267,7 @@ static void yaw_key_task(void *pvParameters)
 /* OLED 公用行：绘制 yaw 目标行（YT:目标角 ON/OFF），复用于等待/正常两种状态。 */
 static void oled_print_yaw_target(const app_yaw_status_t *yaw_state)
 {
-    int32_t tgt_abs = app_abs_i32(yaw_state->target_yaw_deg10);
+    int32_t tgt_abs = util_abs_i32(yaw_state->target_yaw_deg10);
     char tgt_sign = (yaw_state->target_yaw_deg10 < 0) ? '-' : ' ';
 
     OLED_vsprint(0, 32, 16, "YT:%c%3ld.%1ld %s", tgt_sign,
@@ -304,9 +321,9 @@ static void oled_task(void *pvParameters)
             OLED_vsprint(0, 48, 16, "check MPU6050  ");
         } else {
             /* 正常显示：符号与数值分离，角度按 X.X 格式输出。 */
-            int32_t tgt_abs = app_abs_i32(yaw_state.target_yaw_deg10);
-            int32_t now_abs = app_abs_i32(attitude.yaw_deg10);
-            int32_t err_abs = app_abs_i32(yaw_state.error_yaw_deg10);
+            int32_t tgt_abs = util_abs_i32(yaw_state.target_yaw_deg10);
+            int32_t now_abs = util_abs_i32(attitude.yaw_deg10);
+            int32_t err_abs = util_abs_i32(yaw_state.error_yaw_deg10);
             char tgt_sign = (yaw_state.target_yaw_deg10 < 0) ? '-' : ' ';
             char now_sign = (attitude.yaw_deg10 < 0) ? '-' : ' ';
             char err_sign = (yaw_state.error_yaw_deg10 < 0) ? '-' : ' ';

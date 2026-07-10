@@ -702,6 +702,16 @@
           </Files>
         </Group>
         <Group>
+          <GroupName>Component/common</GroupName>
+          <Files>
+            <File>
+              <FileName>util.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/common/util.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
           <GroupName>Component/task</GroupName>
           <Files>
             <File>
