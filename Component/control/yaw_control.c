@@ -12,6 +12,7 @@
  *          - 到位锁存 + 重捕获确认（连续 2 周期超阈值才重新修正）。
  */
 #include "control/yaw_control.h"
+#include "common/util.h"
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  yaw 可调参数区
@@ -35,11 +36,6 @@
 #define YAW_RECOVER_MAX_TURN_RPM       15   /* 小误差恢复曲线最大转向速度 */
 #define YAW_APPROACH_BRAKE_ZONE_DEG10  120  /* 12° 内快速靠近则清零制动 */
 #define YAW_APPROACH_DERR_DEG10        2    /* 0.2°/50ms 以上认为明显靠近 */
-
-int32_t yaw_abs_i32(int32_t value)
-{
-    return (value < 0) ? -value : value;
-}
 
 /* 限幅到 [min, max]。 */
 static int32_t clamp_i32(int32_t value, int32_t min_value, int32_t max_value)
@@ -103,7 +99,7 @@ static int32_t yaw_target_ramp_step(int32_t current_deg10,
     if (step_deg10 < 0) {
         step_deg10 = -step_deg10;
     }
-    if (step_deg10 == 0 || yaw_abs_i32(delta) <= step_deg10) {
+    if (step_deg10 == 0 || util_abs_i32(delta) <= step_deg10) {
         return yaw_normalize_deg10(target_deg10);
     }
 
@@ -178,7 +174,7 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
         return 0;
     }
 
-    int32_t abs_err = yaw_abs_i32(err_deg10);
+    int32_t abs_err = util_abs_i32(err_deg10);
     int32_t deadband = YAW_DEADBAND_DEG10;
     int32_t min_turn = YAW_MIN_TURN_RPM;
     int32_t izone = YAW_INTEGRAL_ZONE_DEG10;
@@ -208,7 +204,7 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
     bool approaching_target =
         ((err_deg10 > 0 && derr < 0) || (err_deg10 < 0 && derr > 0));
     bool approaching_fast = approaching_target &&
-        (yaw_abs_i32(derr) >= YAW_APPROACH_DERR_DEG10);
+        (util_abs_i32(derr) >= YAW_APPROACH_DERR_DEG10);
     if (approaching_close_out != 0) {
         *approaching_close_out = approaching_fast &&
             abs_err <= YAW_APPROACH_BRAKE_ZONE_DEG10;
@@ -275,7 +271,7 @@ static int32_t yaw_pid_compute_turn(pid_pos_t *pid,
     if (allow_static_boost && recover_turn > 0 &&
         abs_err <= YAW_MIN_TURN_ZONE_DEG10 &&
         !(approaching_fast && abs_err <= YAW_APPROACH_BRAKE_ZONE_DEG10) &&
-        output_same_direction && yaw_abs_i32(output) < recover_turn) {
+        output_same_direction && util_abs_i32(output) < recover_turn) {
         output = (err_sign > 0) ? recover_turn : -recover_turn;
     }
 
@@ -318,7 +314,7 @@ void yaw_control_update(yaw_control_t *control,
 
     output->control_error_deg10 = yaw_normalize_deg10(
         control->control_target_deg10 - current_yaw_deg10);
-    int32_t abs_control_error = yaw_abs_i32(output->control_error_deg10);
+    int32_t abs_control_error = util_abs_i32(output->control_error_deg10);
 
     /* 到位锁存状态下的重捕获判定：连续超阈值才退出锁存重新修正。 */
     if (control->settled_latch) {

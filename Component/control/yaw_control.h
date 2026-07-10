@@ -48,8 +48,6 @@ int32_t yaw_normalize_deg10(int32_t angle_deg10);
 int32_t yaw_float_deg_to_deg10(float angle_deg);
 /* 浮点角度归一化到 (-180, 180]。 */
 float yaw_normalize_deg(float angle);
-/* 取绝对值（OLED 显示等复用）。 */
-int32_t yaw_abs_i32(int32_t value);
 
 /** 初始化 yaw 控制器：装入默认 PID 参数并复位状态。 */
 void yaw_control_init(yaw_control_t *control);
