@@ -70,6 +70,10 @@ try:
         TARGET_PERSPECTIVE_MIN_H,
         TARGET_PERSPECTIVE_MIN_W,
         TARGET_RECT_THRESHOLD,
+        TARGET_ROUGH_FAST_MOVE_DISTANCE,
+        TARGET_ROUGH_FIRST_ENABLE,
+        TARGET_ROUGH_ROI_PADDING,
+        TARGET_ROUGH_SKIP_PERSPECTIVE_ON_FAST_MOVE,
         TARGET_SMOOTHING_ALPHA_X100,
     )
 except ImportError:
@@ -86,7 +90,7 @@ except ImportError:
     SHOW_CENTER_GUIDE = True
     SHOW_GRID = False
     SHOW_ROI = False
-    SHOW_STATUS_TEXT = True
+    SHOW_STATUS_TEXT = False
     SHOW_TARGET_BOX = True
     CROSSHAIR_SIZE = 24
     GRID_LINE_WIDTH = 1
@@ -121,10 +125,14 @@ except ImportError:
     TARGET_PERSPECTIVE_MIN_AREA = 1200
     TARGET_PERSPECTIVE_MAX_ASPECT_X100 = 450
     TARGET_FAST_ROI_ENABLE = True
-    TARGET_FAST_ROI_PADDING = 140
-    TARGET_FULL_SCAN_INTERVAL = 3
+    TARGET_FAST_ROI_PADDING = 180
+    TARGET_FULL_SCAN_INTERVAL = 2
     TARGET_JUMP_REJECT_ENABLE = False
     TARGET_MAX_CENTER_JUMP = 180
+    TARGET_ROUGH_FIRST_ENABLE = True
+    TARGET_ROUGH_ROI_PADDING = 140
+    TARGET_ROUGH_FAST_MOVE_DISTANCE = 30
+    TARGET_ROUGH_SKIP_PERSPECTIVE_ON_FAST_MOVE = True
     TARGET_BLOB_CENTER_METHOD = "rect"
     TARGET_BLOB_THRESHOLDS = [[0, 45, -128, 127, -128, 127]]
     TARGET_BLOB_AREA_MIN = 80
@@ -132,8 +140,8 @@ except ImportError:
     TARGET_BLOB_MIN_W = 6
     TARGET_BLOB_MIN_H = 6
     TARGET_BLOB_MAX_ASPECT_X100 = 350
-    TARGET_SMOOTHING_ALPHA_X100 = 80
-    TARGET_LOST_HOLD_FRAMES = 2
+    TARGET_SMOOTHING_ALPHA_X100 = 90
+    TARGET_LOST_HOLD_FRAMES = 1
     TARGET_CIRCLE_THRESHOLD = 3000
     TARGET_RECT_THRESHOLD = 10000
     TARGET_MIN_RADIUS = 8
@@ -257,8 +265,6 @@ def get_search_roi():
         return get_roi()
 
     if not SMOOTHED_TARGET:
-        return get_roi()
-    if SMOOTHED_TARGET.get("type") != "perspective":
         return get_roi()
     if "rect" not in SMOOTHED_TARGET:
         return get_roi()
@@ -621,6 +627,13 @@ def same_roi(a, b):
     return a[0] == b[0] and a[1] == b[1] and a[2] == b[2] and a[3] == b[3]
 
 
+def append_unique_roi(rois, roi):
+    for existing in rois:
+        if same_roi(existing, roi):
+            return
+    rois.append(roi)
+
+
 def select_perspective_target(rects):
     center_x, center_y = frame_center()
     best = None
@@ -667,33 +680,32 @@ def select_perspective_target(rects):
     return best
 
 
-def detect_perspective_rects(img):
-    search_roi = get_search_roi()
+def detect_perspective_rects(img, rough_target=None):
     full_roi = get_roi()
+    rois = []
+    append_unique_roi(rois, get_search_roi())
 
-    try:
-        rects = safe_find_rects_in_roi(img, search_roi)
-    except MemoryError as err:
-        print("find_perspective memory low: %s" % err)
-        return None
-    except Exception as err:
-        print("find_perspective failed: %s" % err)
-        return None
+    if rough_target and "rect" in rough_target:
+        append_unique_roi(rois, expanded_rect_roi(rough_target["rect"], TARGET_ROUGH_ROI_PADDING))
 
-    best = select_perspective_target(rects)
-    if best or same_roi(search_roi, full_roi):
-        return best
+    if should_full_scan() or not rough_target:
+        append_unique_roi(rois, full_roi)
 
-    try:
-        rects = safe_find_rects_in_roi(img, full_roi)
-    except MemoryError as err:
-        print("find_perspective full memory low: %s" % err)
-        return None
-    except Exception as err:
-        print("find_perspective full failed: %s" % err)
-        return None
+    for roi in rois:
+        try:
+            rects = safe_find_rects_in_roi(img, roi)
+        except MemoryError as err:
+            print("find_perspective memory low: %s" % err)
+            return None
+        except Exception as err:
+            print("find_perspective failed: %s" % err)
+            return None
 
-    return select_perspective_target(rects)
+        best = select_perspective_target(rects)
+        if best:
+            return best
+
+    return None
 
 
 def detect_rects(img):
@@ -735,6 +747,17 @@ def detect_rects(img):
     return best
 
 
+def should_use_rough_target_now(rough_target):
+    if not TARGET_ROUGH_SKIP_PERSPECTIVE_ON_FAST_MOVE:
+        return False
+    if not rough_target or not SMOOTHED_TARGET:
+        return False
+
+    dx = abs(rough_target["x"] - SMOOTHED_TARGET["x"])
+    dy = abs(rough_target["y"] - SMOOTHED_TARGET["y"])
+    return dx > TARGET_ROUGH_FAST_MOVE_DISTANCE or dy > TARGET_ROUGH_FAST_MOVE_DISTANCE
+
+
 def detect_target(img):
     if not ENABLE_TARGET_DETECT:
         return None
@@ -746,9 +769,15 @@ def detect_target(img):
     rect_target = None
 
     if mode == "perspective" or mode == "auto":
-        perspective_target = detect_perspective_rects(img)
+        if TARGET_ROUGH_FIRST_ENABLE:
+            blob_target = detect_blobs(img)
+            if blob_target and should_use_rough_target_now(blob_target):
+                blob_target["type"] = "blob-fast"
+                return blob_target
+        perspective_target = detect_perspective_rects(img, blob_target)
     if mode == "blob" or mode == "auto":
-        blob_target = detect_blobs(img)
+        if not blob_target:
+            blob_target = detect_blobs(img)
     if mode == "circle" or mode == "auto":
         circle_target = detect_circles(img)
     if mode == "rect" or mode == "auto":
@@ -764,9 +793,10 @@ def detect_target(img):
     if perspective_target:
         return perspective_target
     if mode == "perspective" and TARGET_PERSPECTIVE_FALLBACK_BLOB:
-        blob_target = detect_blobs(img)
+        if not blob_target:
+            blob_target = detect_blobs(img)
         if blob_target:
-            blob_target["type"] = "blob-fallback"
+            blob_target["type"] = "blob-fast"
             return blob_target
     if blob_target:
         return blob_target
