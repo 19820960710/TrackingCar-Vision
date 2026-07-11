@@ -18,6 +18,8 @@ try:
         LASER_AREA_MAX,
         LASER_AREA_MIN,
         LASER_COLOR,
+        LASER_CONFIRM_DISTANCE,
+        LASER_CONFIRM_FRAMES,
         LASER_GREEN_THRESHOLDS,
         LASER_MAX_ASPECT_X100,
         LASER_MAX_H,
@@ -38,8 +40,11 @@ try:
         SHOW_ROI,
         SHOW_STATUS_TEXT,
         SHOW_TARGET_BOX,
-        TARGET_MARKER_BOX_MAX_SIZE,
-        TARGET_MARKER_BOX_MIN_SIZE,
+        TARGET_BLOB_CENTER_METHOD,
+        TARGET_MARKER_BOX_MAX_H,
+        TARGET_MARKER_BOX_MAX_W,
+        TARGET_MARKER_BOX_MIN_H,
+        TARGET_MARKER_BOX_MIN_W,
         TARGET_MARKER_BOX_PADDING,
         TARGET_CIRCLE_THRESHOLD,
         TARGET_BLOB_AREA_MIN,
@@ -75,27 +80,32 @@ except ImportError:
     SHOW_TARGET_BOX = True
     CROSSHAIR_SIZE = 24
     GRID_LINE_WIDTH = 1
-    ENABLE_LASER_DETECT = True
+    ENABLE_LASER_DETECT = False
     LASER_COLOR = "red"
-    LASER_RED_THRESHOLDS = [[40, 100, 30, 127, -20, 127]]
+    LASER_RED_THRESHOLDS = [[70, 100, 35, 127, -20, 127]]
     LASER_GREEN_THRESHOLDS = [[40, 100, -128, -15, -20, 80]]
     LASER_USE_ROI = True
     LASER_AREA_MIN = 2
-    LASER_AREA_MAX = 250
+    LASER_AREA_MAX = 120
     LASER_PIXELS_MIN = 2
     LASER_MIN_W = 1
     LASER_MIN_H = 1
     LASER_MAX_W = 30
     LASER_MAX_H = 30
     LASER_MAX_ASPECT_X100 = 300
+    LASER_CONFIRM_FRAMES = 3
+    LASER_CONFIRM_DISTANCE = 12
     PRINT_LASER = False
     ROI_SCALE_NUM = 4
     ROI_SCALE_DEN = 5
-    TARGET_MARKER_BOX_MIN_SIZE = 56
-    TARGET_MARKER_BOX_PADDING = 18
-    TARGET_MARKER_BOX_MAX_SIZE = 160
+    TARGET_MARKER_BOX_MIN_W = 72
+    TARGET_MARKER_BOX_MIN_H = 48
+    TARGET_MARKER_BOX_PADDING = 14
+    TARGET_MARKER_BOX_MAX_W = 220
+    TARGET_MARKER_BOX_MAX_H = 170
     ENABLE_TARGET_DETECT = True
     TARGET_MODE = "blob"
+    TARGET_BLOB_CENTER_METHOD = "rect"
     TARGET_BLOB_THRESHOLDS = [[0, 45, -128, 127, -128, 127]]
     TARGET_BLOB_AREA_MIN = 80
     TARGET_BLOB_PIXELS_MIN = 80
@@ -120,6 +130,8 @@ LAST_TARGET = None
 SMOOTHED_TARGET = None
 TARGET_LOST_COUNT = 0
 LAST_LASER = None
+LASER_CANDIDATE = None
+LASER_CONFIRM_COUNT = 0
 
 
 def frame_center():
@@ -289,6 +301,9 @@ def rect_center(rect):
 
 
 def blob_center(blob, rect):
+    if TARGET_BLOB_CENTER_METHOD == "rect":
+        return rect_center(rect)
+
     try:
         return blob.cx(), blob.cy()
     except Exception:
@@ -394,6 +409,40 @@ def detect_laser(img):
             }
 
     return best
+
+
+def laser_candidate_matches(candidate, raw_laser):
+    if not candidate or not raw_laser:
+        return False
+
+    return (
+        abs(candidate["x"] - raw_laser["x"]) <= LASER_CONFIRM_DISTANCE
+        and abs(candidate["y"] - raw_laser["y"]) <= LASER_CONFIRM_DISTANCE
+    )
+
+
+def update_laser_tracking(raw_laser):
+    global LASER_CANDIDATE, LASER_CONFIRM_COUNT
+
+    if not ENABLE_LASER_DETECT or not raw_laser:
+        LASER_CANDIDATE = None
+        LASER_CONFIRM_COUNT = 0
+        return None
+
+    if LASER_CONFIRM_FRAMES <= 1:
+        LASER_CANDIDATE = raw_laser
+        LASER_CONFIRM_COUNT = 1
+        return raw_laser
+
+    if laser_candidate_matches(LASER_CANDIDATE, raw_laser):
+        LASER_CONFIRM_COUNT += 1
+    else:
+        LASER_CANDIDATE = raw_laser
+        LASER_CONFIRM_COUNT = 1
+
+    if LASER_CONFIRM_COUNT >= LASER_CONFIRM_FRAMES:
+        return raw_laser
+    return None
 
 
 def detect_circles(img):
@@ -649,25 +698,28 @@ def clip_rect_to_frame(x, y, w, h):
     return [left, top, clipped_w, clipped_h]
 
 
-def target_marker_box_size(target):
-    size = TARGET_MARKER_BOX_MIN_SIZE
+def target_marker_box_rect(target, x, y):
+    box_w = TARGET_MARKER_BOX_MIN_W
+    box_h = TARGET_MARKER_BOX_MIN_H
     if "radius" in target:
-        size = max(size, target["radius"] * 2)
+        diameter = target["radius"] * 2
+        box_w = max(box_w, diameter)
+        box_h = max(box_h, diameter)
     if "rect" in target:
         rect = target["rect"]
-        size = max(size, rect[2], rect[3])
+        box_w = max(box_w, rect[2])
+        box_h = max(box_h, rect[3])
 
-    size += TARGET_MARKER_BOX_PADDING * 2
-    return min(size, TARGET_MARKER_BOX_MAX_SIZE)
+    box_w = min(box_w + TARGET_MARKER_BOX_PADDING * 2, TARGET_MARKER_BOX_MAX_W)
+    box_h = min(box_h + TARGET_MARKER_BOX_PADDING * 2, TARGET_MARKER_BOX_MAX_H)
+    return clip_rect_to_frame(x - box_w // 2, y - box_h // 2, box_w, box_h)
 
 
 def draw_stable_target_box(img, target, x, y):
     if not SHOW_TARGET_BOX:
         return
 
-    size = target_marker_box_size(target)
-    half = size // 2
-    rect = clip_rect_to_frame(x - half, y - half, size, size)
+    rect = target_marker_box_rect(target, x, y)
     if rect:
         img.draw_rect(rect[0], rect[1], rect[2], rect[3], image.COLOR_RED, 2)
 
@@ -710,7 +762,9 @@ def draw_aim_status(img, target, laser):
     else:
         img.draw_string(8, y0, "target: LOST", image.COLOR_RED)
 
-    if laser:
+    if not ENABLE_LASER_DETECT:
+        img.draw_string(8, y0 + 20, "laser: OFF", image.COLOR_BLUE)
+    elif laser:
         img.draw_string(8, y0 + 20, "laser: %s (%d,%d)" % (LASER_COLOR, laser["x"], laser["y"]), image.COLOR_BLUE)
     else:
         img.draw_string(8, y0 + 20, "laser: LOST", image.COLOR_BLUE)
@@ -720,6 +774,8 @@ def draw_aim_status(img, target, laser):
         dy = target["y"] - laser["y"]
         img.draw_string(8, y0 + 40, "aim: dx=%d dy=%d" % (dx, dy), image.COLOR_YELLOW)
         img.draw_line(laser["x"], laser["y"], target["x"], target["y"], image.COLOR_YELLOW, 1)
+    elif target and not ENABLE_LASER_DETECT:
+        img.draw_string(8, y0 + 40, "aim: TARGET ONLY", image.COLOR_YELLOW)
     else:
         img.draw_string(8, y0 + 40, "aim: WAIT", image.COLOR_YELLOW)
 
@@ -742,7 +798,7 @@ def process_frame(img, fps):
     if DETECT_EVERY_N_FRAMES <= 1 or FRAME_INDEX % DETECT_EVERY_N_FRAMES == 0:
         raw_target = detect_target(img)
         LAST_TARGET = update_target_tracking(raw_target)
-        LAST_LASER = detect_laser(img)
+        LAST_LASER = update_laser_tracking(detect_laser(img))
 
     target = LAST_TARGET
     laser = LAST_LASER

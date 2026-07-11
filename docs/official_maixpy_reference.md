@@ -12,11 +12,12 @@ The current `maixcam/main.py` stays as a lightweight real-time baseline:
 
 - Use `find_blobs` with LAB thresholds to detect dark target candidates.
 - Use ROI, area threshold, and pixel threshold to reduce false candidates.
-- Use `blob.cx()` and `blob.cy()` as the center when available.
-- Draw a stable red display box around the detected center instead of using the raw blob bounding box.
+- Use the candidate rectangle center as the default target center.
+- Draw a rectangular red display box around the detected center instead of using unstable blob corner lines.
 - Use `buff_num=1` to reduce camera capture latency.
 - Skip the first few camera frames after startup.
 - Keep camera contrast configurable, but disabled by default.
+- Keep laser detection disabled by default until a real laser pointer is available.
 
 ## Official 2025 E Demo Takeaways
 
@@ -54,6 +55,7 @@ If the target center jumps, keep the red box on for checking the detected center
 
 ```python
 SHOW_TARGET_BOX = True
+TARGET_BLOB_CENTER_METHOD = "rect"
 ```
 
 Then tune:
@@ -63,4 +65,10 @@ TARGET_BLOB_THRESHOLDS
 TARGET_BLOB_AREA_MIN
 TARGET_BLOB_PIXELS_MIN
 TARGET_SMOOTHING_ALPHA_X100
+```
+
+Laser detection should stay disabled before real laser testing:
+
+```python
+ENABLE_LASER_DETECT = False
 ```

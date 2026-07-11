@@ -83,9 +83,10 @@ For blob targets, the default output is center-first. The red box is drawn aroun
 
 ```python
 SHOW_TARGET_BOX = True
+TARGET_BLOB_CENTER_METHOD = "rect"
 ```
 
-The red box is a stable display box centered on the detected point. It is not the raw blob bounding box, so it will not stretch badly when the camera is tilted.
+The red box is a rectangular display box centered on the detected point. The target center uses the candidate rectangle center by default, not the dark-pixel center, because black rings, shadows, and uneven borders can pull the pixel center away from the real target center.
 
 ## Target Smoothing
 
@@ -100,12 +101,12 @@ Increase `TARGET_SMOOTHING_ALPHA_X100` for faster response. Decrease it for less
 
 ## Laser Detection
 
-`maixcam/main.py` also detects the laser spot with `find_blobs`.
+`maixcam/main.py` can detect the laser spot with `find_blobs`, but laser detection is off by default until a real laser pointer is available.
 
 Default settings:
 
 ```python
-ENABLE_LASER_DETECT = True
+ENABLE_LASER_DETECT = False
 LASER_COLOR = "red"
 ```
 
@@ -129,6 +130,13 @@ LASER_COLOR = "green"
 ```
 
 If the laser is not detected, tune `LASER_RED_THRESHOLDS` or `LASER_GREEN_THRESHOLDS`.
+
+Laser detection also requires a candidate to appear for several frames before it is reported:
+
+```python
+LASER_CONFIRM_FRAMES = 3
+LASER_CONFIRM_DISTANCE = 12
+```
 
 ## API Reference
 
