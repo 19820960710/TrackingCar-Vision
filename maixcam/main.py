@@ -1,19 +1,33 @@
 from maix import app, camera, display, image, time
 
-from config import (
-    CAMERA_HEIGHT,
-    CAMERA_WIDTH,
-    CROSSHAIR_SIZE,
-    GRID_LINE_WIDTH,
-    PRINT_FPS,
-    ROI_SCALE_DEN,
-    ROI_SCALE_NUM,
-    SHOW_CENTER_GUIDE,
-    SHOW_FPS,
-    SHOW_GRID,
-    SHOW_ROI,
-    SHOW_STATUS_TEXT,
-)
+try:
+    from config import (
+        CAMERA_HEIGHT,
+        CAMERA_WIDTH,
+        CROSSHAIR_SIZE,
+        GRID_LINE_WIDTH,
+        PRINT_FPS,
+        ROI_SCALE_DEN,
+        ROI_SCALE_NUM,
+        SHOW_CENTER_GUIDE,
+        SHOW_FPS,
+        SHOW_GRID,
+        SHOW_ROI,
+        SHOW_STATUS_TEXT,
+    )
+except ImportError:
+    CAMERA_WIDTH = 640
+    CAMERA_HEIGHT = 480
+    SHOW_FPS = True
+    PRINT_FPS = True
+    SHOW_CENTER_GUIDE = True
+    SHOW_GRID = True
+    SHOW_ROI = True
+    SHOW_STATUS_TEXT = True
+    CROSSHAIR_SIZE = 24
+    GRID_LINE_WIDTH = 1
+    ROI_SCALE_NUM = 4
+    ROI_SCALE_DEN = 5
 
 
 STAGE_NAME = "DEBUG_VIEW"

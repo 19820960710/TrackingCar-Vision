@@ -35,6 +35,8 @@ After preview works:
 - Use `maixcam/main.py` for the real vision pipeline.
 - Keep PC-only OpenCV helper scripts under `scripts/`.
 
+`maixcam/main.py` can run as a single file in MaixVision. If `config.py` is not uploaded with it, built-in fallback settings are used.
+
 ## Debug Overlay
 
 `maixcam/main.py` shows:

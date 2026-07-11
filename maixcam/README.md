@@ -25,4 +25,6 @@ Expected result:
 - `main.py`: project entry with center crosshair and coordinate debug overlay
 - `config.py`: device-side resolution and debug settings
 
+`main.py` also has built-in fallback settings, so it can run even if MaixVision only uploads this one file.
+
 Keep PC OpenCV code under `scripts/` and MaixPy code under `maixcam/`.
