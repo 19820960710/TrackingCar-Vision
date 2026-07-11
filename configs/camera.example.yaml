@@ -1,13 +1,31 @@
-# Copy this file to camera.local.yaml for local tuning.
-# Keep camera.local.yaml uncommitted if it contains machine-specific settings.
+# Copy this file to camera.local.yaml for local PC-side tuning.
+# Local YAML files are ignored by Git.
 
-camera:
+pc_camera:
   id: 0
   width: 640
   height: 480
   fps: 30
 
-algorithm:
-  mode: debug
-  target_color: red
-  min_area: 100
+maixcam_reference:
+  width: 512
+  height: 320
+  fps: 60
+  buffer_num: 1
+  detect_every_n_frames: 2
+
+target:
+  mode: perspective
+  perspective_fallback_blob: true
+  smoothing_alpha_x100: 35
+
+laser:
+  color: green
+  use_background_calib: true
+  background_calib_frames: 25
+  require_target: true
+
+uart:
+  enabled: false
+  output_mode: aim
+  baudrate: 115200

@@ -1,6 +1,6 @@
 # UART Protocol
 
-`maixcam/main.py` can send the target offset to the main controller through UART.
+`maixcam/main.py` can send vision results to the main controller through UART.
 
 UART output is disabled by default:
 
@@ -32,36 +32,62 @@ MaixCam GND -> Main controller GND
 
 The default output uses UART1 to avoid UART0 boot logs and MaixVision communication.
 
-## Message Format
+## Aim Mode
+
+For self-aiming, use:
+
+```python
+UART_OUTPUT_MODE = "aim"
+```
 
 One line is sent every `UART_SEND_EVERY_N_FRAMES` frames:
+
+```text
+AIM,valid,dx,dy,target_x,target_y,laser_x,laser_y,target_mode,laser_color\n
+```
+
+Fields:
+
+- `AIM`: fixed header
+- `valid`: `1` only when both target and laser are valid
+- `dx`: `target_x - laser_x`
+- `dy`: `target_y - laser_y`
+- `target_x`, `target_y`: target center in image coordinates
+- `laser_x`, `laser_y`: laser point in image coordinates
+- `target_mode`: `perspective`, `blob-fallback`, or `LOST`
+- `laser_color`: `green`, `red`, `NO_LASER`, or `LOST`
+
+Example:
+
+```text
+AIM,1,-12,8,244,168,256,160,perspective,green
+AIM,0,0,0,244,168,0,0,perspective,NO_LASER
+AIM,0,0,0,0,0,0,0,LOST,LOST
+```
+
+Controller meaning:
+
+```text
+dx < 0: laser is right of target, move correction left
+dx > 0: laser is left of target, move correction right
+dy < 0: laser is below target, move correction up
+dy > 0: laser is above target, move correction down
+```
+
+Check motor direction on the real gimbal. If movement is reversed, flip the sign in the controller.
+
+## Target Mode
+
+For older target-only tests, use:
+
+```python
+UART_OUTPUT_MODE = "target"
+```
+
+Format:
 
 ```text
 TV,valid,dx,dy,x,y,mode\n
 ```
 
-Fields:
-
-- `TV`: fixed header
-- `valid`: `1` if target is valid, `0` if target is lost
-- `dx`: target x offset from image center, right is positive
-- `dy`: target y offset from image center, down is positive
-- `x`: target x coordinate in the image
-- `y`: target y coordinate in the image
-- `mode`: target detection mode, such as `perspective` or `LOST`
-
-Example:
-
-```text
-TV,1,-12,8,244,168,perspective
-TV,0,0,0,0,0,LOST
-```
-
-For a controller, start with `dx` and `dy`:
-
-```text
-dx < 0: target is left of image center
-dx > 0: target is right of image center
-dy < 0: target is above image center
-dy > 0: target is below image center
-```
+Here `dx` and `dy` are target offset from image center, not laser aiming error.

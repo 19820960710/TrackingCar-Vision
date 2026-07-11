@@ -7,6 +7,7 @@
 3. Open `maixcam/camera_preview.py`.
 4. Click Run.
 5. Check that the camera image appears on the device screen.
+6. Check that FPS text is drawn on the image.
 
 ## Recommended First Settings
 
@@ -33,11 +34,12 @@ CAMERA_CONTRAST = -1
 
 After preview works:
 
-1. Run `maixcam/main.py` and confirm the center crosshair is displayed.
-2. Add target detection in `maixcam/main.py`.
-3. Add laser spot detection.
-4. Calculate `dx` and `dy`.
-5. Send aiming data to the main controller by UART.
+1. Run `maixcam/main.py` with the green laser off.
+2. Wait for `laser: CAL x/25` to finish.
+3. Confirm the red target outline is reasonable.
+4. Turn on the green laser and check the blue laser marker.
+5. Check `aim dx/dy`.
+6. Enable UART only after the screen result is stable.
 
 ## Code Roles
 
@@ -52,14 +54,15 @@ After preview works:
 `maixcam/main.py` shows:
 
 - center crosshair
-- 3x3 guide grid
-- center ROI rectangle
+- optional 3x3 guide grid
+- optional center ROI rectangle
 - detected target center
-- target offset from image center
+- detected laser center
+- target-to-laser aiming error
 - FPS state
 - image size and coordinate direction
 
-The ROI is centered and covers 80% of the image by default. Change `ROI_SCALE_NUM` and `ROI_SCALE_DEN` in `maixcam/config.py` if needed.
+The ROI is centered and covers 80% of the image by default. It is hidden by default for FPS, but can be shown with `SHOW_ROI = True`.
 
 ## Target Detection
 
@@ -111,7 +114,11 @@ Default settings:
 ```python
 ENABLE_LASER_DETECT = True
 LASER_COLOR = "green"
-LASER_GREEN_THRESHOLDS = [[65, 100, -128, -20, -20, 90]]
+LASER_GREEN_THRESHOLDS = [[70, 100, -128, -12, -128, 127]]
+LASER_USE_ROI = False
+LASER_REQUIRE_TARGET = True
+LASER_FALLBACK_FULL_FRAME = False
+LASER_USE_TARGET_ROI = True
 ```
 
 The screen shows:
@@ -138,8 +145,23 @@ If the laser is not detected, tune `LASER_RED_THRESHOLDS` or `LASER_GREEN_THRESH
 Laser detection also requires a candidate to appear for several frames before it is reported:
 
 ```python
+CAMERA_FPS = 60
+PRINT_FPS = False
+SHOW_GRID = False
+SHOW_ROI = False
+DETECT_EVERY_N_FRAMES = 2
 LASER_CONFIRM_FRAMES = 2
-LASER_CONFIRM_DISTANCE = 18
+LASER_CONFIRM_DISTANCE = 20
+LASER_SMOOTHING_ALPHA_X100 = 85
+LASER_LOST_HOLD_FRAMES = 0
+```
+
+For green laser testing, start the program with the laser off. The first frames are used to learn static green reflections:
+
+```python
+LASER_USE_BACKGROUND_CALIB = True
+LASER_BACKGROUND_CALIB_FRAMES = 25
+LASER_STATIC_REJECT_DISTANCE = 18
 ```
 
 ## UART Output
@@ -148,14 +170,26 @@ UART output is available but disabled by default:
 
 ```python
 ENABLE_UART_OUTPUT = False
+UART_OUTPUT_MODE = "aim"
 ```
 
 When the main controller is ready, enable it in `maixcam/config.py` or in the fallback settings at the top of `maixcam/main.py`.
+
+The default UART line is `AIM,valid,dx,dy,target_x,target_y,laser_x,laser_y,target_mode,laser_color`.
 
 The UART protocol is documented in:
 
 ```text
 docs/uart_protocol.md
+```
+
+## Tuning And Testing
+
+Use these two files before changing code again:
+
+```text
+docs/tuning_guide.md
+docs/test_checklist.md
 ```
 
 ## API Reference

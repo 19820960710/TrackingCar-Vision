@@ -2,12 +2,20 @@ from maix import app, camera, display, image, time
 
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
+CAMERA_FPS = 60
 SHOW_FPS = True
-PRINT_FPS = True
+PRINT_FPS = False
+
+
+def create_camera():
+    try:
+        return camera.Camera(CAMERA_WIDTH, CAMERA_HEIGHT, fps=CAMERA_FPS)
+    except TypeError:
+        return camera.Camera(CAMERA_WIDTH, CAMERA_HEIGHT)
 
 
 def main():
-    cam = camera.Camera(CAMERA_WIDTH, CAMERA_HEIGHT)
+    cam = create_camera()
     disp = display.Display()
 
     while not app.need_exit():

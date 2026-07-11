@@ -1,21 +1,60 @@
 # TrackingCar-Vision
 
-Vision code for the NUEDC tracking car project.
+Vision code for the NUEDC tracking car / self-aiming project.
+
+The current runnable device program is:
+
+```text
+D:\Documents\电赛\TrackingCar-Vision\maixcam\main.py
+```
+
+Open this file in MaixVision and run it on MaixCam Pro.
+
+## Current Status
+
+- Camera preview works on MaixCam Pro.
+- Target detection uses perspective rectangle detection first, with blob fallback.
+- Green laser detection is enabled and uses target-area search plus startup background calibration.
+- The screen shows target center, laser center, aiming error, FPS, and state text.
+- UART output is available but disabled by default.
 
 ## Project Layout
 
 ```text
 TrackingCar-Vision/
-├─ src/                 # Core vision code
-├─ maixcam/             # MaixCam Pro / MaixPy device-side scripts
-├─ scripts/             # Small test and helper scripts
-├─ configs/             # Camera and algorithm parameters
-├─ docs/                # Notes, logs, and collaboration records
-├─ data/                # Local datasets, not committed to Git
-└─ models/              # Local model weights, not committed to Git
++-- maixcam/   MaixCam Pro / MaixPy device-side scripts
++-- docs/      run notes, tuning notes, UART protocol, test checklist
++-- scripts/   PC-side helper scripts
++-- configs/   example configuration files
++-- src/       PC-side placeholder modules
++-- data/      local images/videos, ignored by Git
++-- models/    local model files, ignored by Git
 ```
 
-## Daily Workflow
+## Quick Run
+
+1. Connect MaixCam Pro.
+2. Open MaixVision.
+3. Open `maixcam/main.py`.
+4. Click Run.
+5. Keep the green laser off while `laser: CAL x/25` is shown.
+6. After it changes to `laser: LOST`, point the green laser at the target.
+
+For a first camera-only check, run:
+
+```text
+maixcam/camera_preview.py
+```
+
+## Main Documents
+
+- `docs/maixcam_quickstart.md`: how to run and what each overlay means
+- `docs/tuning_guide.md`: what to adjust when target, laser, or FPS is bad
+- `docs/test_checklist.md`: field test checklist
+- `docs/uart_protocol.md`: UART output format for the main controller
+- `docs/reference_review.md`: notes from the reference folder you provided
+
+## Daily Git Workflow
 
 Before editing:
 
@@ -28,34 +67,9 @@ After editing:
 ```powershell
 git status
 git add .
-git commit -m "更新视觉代码"
+git commit -m "Update vision code"
 git pull
 git push
 ```
 
-## What To Commit
-
-Commit these files:
-
-- source code
-- config examples
-- short experiment notes
-- small reference images if needed
-
-Do not commit these files:
-
-- large videos
-- full datasets
-- generated output folders
-- model weights such as `.pt`, `.onnx`, `.engine`
-
-Large local files can be stored in `data/` or `models/`, but they are ignored by Git.
-
-## Camera Targets
-
-This repository keeps two camera test paths:
-
-- `scripts/check_camera.py`: PC-side OpenCV preview for a USB camera.
-- `maixcam/camera_preview.py`: MaixCam Pro device-side preview using MaixPy.
-
-For MaixCam Pro, copy or open `maixcam/camera_preview.py` in MaixVision and run it on the device.
+Do not commit large videos, full datasets, generated output folders, or model weights.

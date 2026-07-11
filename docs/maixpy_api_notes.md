@@ -43,7 +43,7 @@ img.draw_string(x, y, "text", image.COLOR_GREEN)
 Camera tuning:
 
 ```python
-cam = camera.Camera(width, height, buff_num=1)
+cam = camera.Camera(width, height, fps=60, buff_num=1)
 cam.skip_frames(5)
 cam.exposure(value)
 cam.gain(value)
@@ -56,13 +56,24 @@ UART output:
 
 ```python
 serial_dev = uart.UART("/dev/ttyS1", 115200)
-serial_dev.write_str("TV,1,dx,dy,x,y,perspective\n")
+serial_dev.write_str("AIM,1,dx,dy,target_x,target_y,laser_x,laser_y,perspective,green\n")
 ```
 
 Green laser threshold:
 
 ```python
-LASER_GREEN_THRESHOLDS = [[65, 100, -128, -20, -20, 90]]
+LASER_GREEN_THRESHOLDS = [[70, 100, -128, -12, -128, 127]]
+LASER_REQUIRE_TARGET = True
+LASER_FALLBACK_FULL_FRAME = False
+LASER_USE_TARGET_ROI = True
+LASER_USE_BACKGROUND_CALIB = True
+```
+
+Background calibration:
+
+```python
+LASER_BACKGROUND_CALIB_FRAMES = 25
+LASER_STATIC_REJECT_DISTANCE = 18
 ```
 
 ## Development Order
@@ -70,7 +81,7 @@ LASER_GREEN_THRESHOLDS = [[65, 100, -128, -20, -20, 90]]
 1. Make target detection stable with `find_blobs` first.
 2. Keep laser detection off until a real laser pointer is available.
 3. Use fixed exposure and gain if color detection drifts.
-4. Send `dx`, `dy`, and state to the main controller through UART.
+4. Send `AIM` data to the main controller through UART.
 
 Protocol details:
 

@@ -1,30 +1,38 @@
-# MaixCam Pro
+# MaixCam Pro Scripts
 
 This folder contains scripts intended to run on MaixCam Pro with MaixPy.
 
-## First Camera Preview
+## Files
 
-Open this file in MaixVision and run it on the device:
+- `camera_preview.py`: simplest camera preview test
+- `main.py`: main target + green laser + aiming pipeline
+- `config.py`: runtime parameters copied by `main.py`
 
-```text
-maixcam/camera_preview.py
-```
+`main.py` also contains fallback settings, so it can run even when MaixVision uploads only this one file.
 
-`camera_preview.py` is standalone, so it can run even if you only open this one file in MaixVision.
+## Recommended Run Order
 
-Expected result:
+1. Run `camera_preview.py` to confirm the camera image is clear.
+2. Run `main.py` with the green laser off.
+3. Wait for `laser: CAL x/25` to finish.
+4. Confirm `target: perspective (...)` or `target: blob-fallback (...)` appears.
+5. Point the green laser at the target and check the blue laser marker.
 
-- the MaixCam screen shows the camera image
-- FPS is printed in the MaixVision console
-- FPS text is drawn on the image
-- press the device function key or stop the script in MaixVision to exit
+## Current Pipeline
 
-## File Roles
+`main.py` does four jobs:
 
-- `camera_preview.py`: first-stage camera preview
-- `main.py`: project entry with center crosshair and coordinate debug overlay
-- `config.py`: device-side resolution and debug settings
+- Reads the camera with low-latency buffering and requested FPS.
+- Detects the tilted target rectangle and computes the center from diagonal intersection.
+- Detects the green laser only near the detected target, with startup background calibration.
+- Draws debug overlay and optionally sends UART aiming data.
 
-`main.py` also has built-in fallback settings, so it can run even if MaixVision only uploads this one file.
+## Important Notes
 
-Keep PC OpenCV code under `scripts/` and MaixPy code under `maixcam/`.
+- Keep the laser off during the first calibration frames.
+- If `laser: CAL` never finishes, check whether `main.py` has the latest calibration fix.
+- If laser detection is too strict, tune `LASER_GREEN_THRESHOLDS` and `LASER_AREA_MAX`.
+- If false positives appear, increase `LASER_BACKGROUND_CALIB_FRAMES` or lower `LASER_AREA_MAX`.
+- If FPS is too low, increase `DETECT_EVERY_N_FRAMES` or hide more debug drawing.
+
+Keep PC OpenCV code under `scripts/` and MaixPy device code under `maixcam/`.

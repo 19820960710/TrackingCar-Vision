@@ -218,6 +218,8 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Project local data and generated outputs
+configs/*.local.yaml
+maixcam/config.local.py
 data/*
 !data/README.md
 models/*

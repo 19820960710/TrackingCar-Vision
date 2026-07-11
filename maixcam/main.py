@@ -10,6 +10,7 @@ try:
         CAMERA_BUFFER_NUM,
         CAMERA_CONTRAST,
         CAMERA_EXPOSURE,
+        CAMERA_FPS,
         CAMERA_GAIN,
         CAMERA_SKIP_FRAMES,
         CAMERA_WB_GAIN,
@@ -33,7 +34,21 @@ try:
         LASER_MIN_W,
         LASER_PIXELS_MIN,
         LASER_RED_THRESHOLDS,
+        LASER_FALLBACK_FULL_FRAME,
+        LASER_BACKGROUND_CALIB_FRAMES,
+        LASER_LOST_HOLD_FRAMES,
+        LASER_MIN_DENSITY_X100,
+        LASER_REQUIRE_TARGET,
+        LASER_STATIC_MIN_HITS,
+        LASER_STATIC_REJECT_DISTANCE,
         LASER_USE_ROI,
+        LASER_SMOOTHING_ALPHA_X100,
+        LASER_SNAP_DISTANCE,
+        LASER_TARGET_BONUS_DISTANCE,
+        LASER_TARGET_ROI_MARGIN,
+        LASER_TRACK_BONUS_DISTANCE,
+        LASER_USE_BACKGROUND_CALIB,
+        LASER_USE_TARGET_ROI,
         PRINT_FPS,
         PRINT_LASER,
         PRINT_TARGET,
@@ -73,6 +88,7 @@ try:
         TARGET_SMOOTHING_ALPHA_X100,
         UART_BAUDRATE,
         UART_PORT,
+        UART_OUTPUT_MODE,
         UART_PRINT_ERRORS,
         UART_RX_FUNC,
         UART_RX_PIN,
@@ -83,6 +99,7 @@ try:
 except ImportError:
     CAMERA_WIDTH = 512
     CAMERA_HEIGHT = 320
+    CAMERA_FPS = 60
     CAMERA_BUFFER_NUM = 1
     CAMERA_SKIP_FRAMES = 5
     CAMERA_CONTRAST = -1
@@ -90,10 +107,10 @@ except ImportError:
     CAMERA_GAIN = -1
     CAMERA_WB_GAIN = []
     SHOW_FPS = True
-    PRINT_FPS = True
+    PRINT_FPS = False
     SHOW_CENTER_GUIDE = True
-    SHOW_GRID = True
-    SHOW_ROI = True
+    SHOW_GRID = False
+    SHOW_ROI = False
     SHOW_STATUS_TEXT = True
     SHOW_TARGET_BOX = True
     CROSSHAIR_SIZE = 24
@@ -101,18 +118,32 @@ except ImportError:
     ENABLE_LASER_DETECT = True
     LASER_COLOR = "green"
     LASER_RED_THRESHOLDS = [[70, 100, 35, 127, -20, 127]]
-    LASER_GREEN_THRESHOLDS = [[65, 100, -128, -20, -20, 90]]
-    LASER_USE_ROI = True
-    LASER_AREA_MIN = 2
+    LASER_GREEN_THRESHOLDS = [[70, 100, -128, -12, -128, 127]]
+    LASER_USE_ROI = False
+    LASER_AREA_MIN = 3
     LASER_AREA_MAX = 90
-    LASER_PIXELS_MIN = 2
+    LASER_PIXELS_MIN = 3
     LASER_MIN_W = 1
     LASER_MIN_H = 1
-    LASER_MAX_W = 24
-    LASER_MAX_H = 24
-    LASER_MAX_ASPECT_X100 = 300
+    LASER_MAX_W = 20
+    LASER_MAX_H = 20
+    LASER_MAX_ASPECT_X100 = 260
     LASER_CONFIRM_FRAMES = 2
-    LASER_CONFIRM_DISTANCE = 18
+    LASER_CONFIRM_DISTANCE = 20
+    LASER_REQUIRE_TARGET = True
+    LASER_FALLBACK_FULL_FRAME = False
+    LASER_USE_TARGET_ROI = True
+    LASER_TARGET_ROI_MARGIN = 28
+    LASER_MIN_DENSITY_X100 = 22
+    LASER_USE_BACKGROUND_CALIB = True
+    LASER_BACKGROUND_CALIB_FRAMES = 25
+    LASER_STATIC_REJECT_DISTANCE = 18
+    LASER_STATIC_MIN_HITS = 3
+    LASER_TRACK_BONUS_DISTANCE = 70
+    LASER_TARGET_BONUS_DISTANCE = 0
+    LASER_SMOOTHING_ALPHA_X100 = 85
+    LASER_SNAP_DISTANCE = 40
+    LASER_LOST_HOLD_FRAMES = 0
     PRINT_LASER = False
     ROI_SCALE_NUM = 4
     ROI_SCALE_DEN = 5
@@ -143,7 +174,7 @@ except ImportError:
     TARGET_MAX_RADIUS = 110
     TARGET_MIN_RECT_W = 20
     TARGET_MIN_RECT_H = 20
-    DETECT_EVERY_N_FRAMES = 1
+    DETECT_EVERY_N_FRAMES = 2
     PRINT_TARGET = False
     ENABLE_UART_OUTPUT = False
     UART_PORT = "/dev/ttyS1"
@@ -152,6 +183,7 @@ except ImportError:
     UART_RX_PIN = "A18"
     UART_TX_FUNC = "UART1_TX"
     UART_RX_FUNC = "UART1_RX"
+    UART_OUTPUT_MODE = "aim"
     UART_SEND_EVERY_N_FRAMES = 2
     UART_PRINT_ERRORS = True
 
@@ -162,6 +194,10 @@ LAST_TARGET = None
 SMOOTHED_TARGET = None
 TARGET_LOST_COUNT = 0
 LAST_LASER = None
+SMOOTHED_LASER = None
+LASER_LOST_COUNT = 0
+LASER_CALIB_FRAMES = 0
+LASER_STATIC_POINTS = []
 LASER_CANDIDATE = None
 LASER_CONFIRM_COUNT = 0
 UART_DEV = None
@@ -174,9 +210,19 @@ def frame_center():
 
 def create_camera():
     try:
+        return camera.Camera(CAMERA_WIDTH, CAMERA_HEIGHT, fps=CAMERA_FPS, buff_num=CAMERA_BUFFER_NUM)
+    except TypeError:
+        pass
+
+    try:
+        return camera.Camera(CAMERA_WIDTH, CAMERA_HEIGHT, fps=CAMERA_FPS)
+    except TypeError:
+        pass
+
+    try:
         return camera.Camera(CAMERA_WIDTH, CAMERA_HEIGHT, buff_num=CAMERA_BUFFER_NUM)
     except TypeError:
-        print("camera buff_num not supported, fallback to default buffer")
+        print("camera fps/buff_num not supported, fallback to default camera")
         return camera.Camera(CAMERA_WIDTH, CAMERA_HEIGHT)
 
 
@@ -272,7 +318,45 @@ def target_output_line(target):
     )
 
 
-def send_uart_target(target):
+def aim_output_line(target, laser):
+    if target and laser:
+        dx = target["x"] - laser["x"]
+        dy = target["y"] - laser["y"]
+        return "AIM,1,%d,%d,%d,%d,%d,%d,%s,%s\n" % (
+            dx,
+            dy,
+            target["x"],
+            target["y"],
+            laser["x"],
+            laser["y"],
+            target["type"],
+            LASER_COLOR,
+        )
+
+    if target:
+        return "AIM,0,0,0,%d,%d,0,0,%s,NO_LASER\n" % (
+            target["x"],
+            target["y"],
+            target["type"],
+        )
+
+    if laser:
+        return "AIM,0,0,0,0,0,%d,%d,NO_TARGET,%s\n" % (
+            laser["x"],
+            laser["y"],
+            LASER_COLOR,
+        )
+
+    return "AIM,0,0,0,0,0,0,0,LOST,LOST\n"
+
+
+def uart_output_line(target, laser):
+    if UART_OUTPUT_MODE == "target":
+        return target_output_line(target)
+    return aim_output_line(target, laser)
+
+
+def send_uart_result(target, laser):
     global UART_ERROR_PRINTED
 
     if not ENABLE_UART_OUTPUT or not UART_DEV:
@@ -281,7 +365,7 @@ def send_uart_target(target):
         return
 
     try:
-        UART_DEV.write_str(target_output_line(target))
+        UART_DEV.write_str(uart_output_line(target, laser))
     except Exception as err:
         if UART_PRINT_ERRORS and not UART_ERROR_PRINTED:
             print("uart output write failed: %s" % err)
@@ -299,6 +383,53 @@ def get_roi():
 def point_in_roi(x, y):
     roi_x, roi_y, roi_w, roi_h = get_roi()
     return roi_x <= x <= roi_x + roi_w and roi_y <= y <= roi_y + roi_h
+
+
+def clamp_rect(x, y, w, h):
+    left = max(0, min(CAMERA_WIDTH - 1, int(x)))
+    top = max(0, min(CAMERA_HEIGHT - 1, int(y)))
+    right = max(left + 1, min(CAMERA_WIDTH, int(x + w)))
+    bottom = max(top + 1, min(CAMERA_HEIGHT, int(y + h)))
+    return left, top, right - left, bottom - top
+
+
+def point_in_rect(x, y, rect):
+    return rect[0] <= x <= rect[0] + rect[2] and rect[1] <= y <= rect[1] + rect[3]
+
+
+def target_laser_roi():
+    if not LASER_USE_TARGET_ROI or not LAST_TARGET or "rect" not in LAST_TARGET:
+        return None
+
+    rect = LAST_TARGET["rect"]
+    margin = LASER_TARGET_ROI_MARGIN
+    return clamp_rect(
+        rect[0] - margin,
+        rect[1] - margin,
+        rect[2] + margin * 2,
+        rect[3] + margin * 2,
+    )
+
+
+def laser_search_rois():
+    rois = []
+    target_roi = target_laser_roi()
+    if target_roi:
+        rois.append(target_roi)
+
+    if LASER_REQUIRE_TARGET and not target_roi:
+        return rois
+    if not LASER_FALLBACK_FULL_FRAME and target_roi:
+        return rois
+
+    if LASER_USE_ROI:
+        fallback_roi = get_roi()
+    else:
+        fallback_roi = None
+
+    if not rois or fallback_roi != rois[0]:
+        rois.append(fallback_roi)
+    return rois
 
 
 def safe_magnitude(obj):
@@ -347,11 +478,10 @@ def laser_thresholds():
     return LASER_RED_THRESHOLDS
 
 
-def safe_find_laser_blobs(img):
-    roi = get_roi()
+def safe_find_laser_blobs(img, roi=None):
     thresholds = laser_thresholds()
     try:
-        if LASER_USE_ROI:
+        if roi:
             return img.find_blobs(
                 thresholds,
                 roi=roi,
@@ -408,6 +538,66 @@ def laser_blob_center(blob, rect):
 
 def rect_area(rect):
     return rect[2] * rect[3]
+
+
+def blob_pixels(blob, fallback):
+    try:
+        return int(blob.pixels())
+    except Exception:
+        return fallback
+
+
+def distance_xy(x1, y1, x2, y2):
+    return abs(x1 - x2) + abs(y1 - y2)
+
+
+def laser_calibrating():
+    return LASER_USE_BACKGROUND_CALIB and LASER_CALIB_FRAMES < LASER_BACKGROUND_CALIB_FRAMES
+
+
+def static_point_matches(point, x, y, distance):
+    return distance_xy(point["x"], point["y"], x, y) <= distance
+
+
+def remember_static_laser_candidate(candidate):
+    for point in LASER_STATIC_POINTS:
+        if static_point_matches(point, candidate["x"], candidate["y"], LASER_STATIC_REJECT_DISTANCE):
+            hits = point["hits"] + 1
+            point["x"] = (point["x"] * point["hits"] + candidate["x"]) // hits
+            point["y"] = (point["y"] * point["hits"] + candidate["y"]) // hits
+            point["hits"] = hits
+            return
+
+    LASER_STATIC_POINTS.append({
+        "x": candidate["x"],
+        "y": candidate["y"],
+        "hits": 1,
+    })
+
+
+def update_laser_background(candidates):
+    global LASER_CALIB_FRAMES
+
+    if not laser_calibrating():
+        return False
+
+    for candidate in candidates:
+        remember_static_laser_candidate(candidate)
+
+    LASER_CALIB_FRAMES += 1
+    return True
+
+
+def laser_is_static_candidate(candidate):
+    if laser_calibrating():
+        return True
+
+    for point in LASER_STATIC_POINTS:
+        if point["hits"] < LASER_STATIC_MIN_HITS:
+            continue
+        if static_point_matches(point, candidate["x"], candidate["y"], LASER_STATIC_REJECT_DISTANCE):
+            return True
+    return False
 
 
 def point_xy(point):
@@ -530,28 +720,33 @@ def detect_blobs(img):
     return best
 
 
-def detect_laser(img):
-    if not ENABLE_LASER_DETECT:
-        return None
+def laser_candidate_score(x, y, area, pixels, density_x100, aspect_x100):
+    score = pixels * 12 + density_x100 * 3 - area - aspect_x100 * 3
 
-    try:
-        blobs = safe_find_laser_blobs(img)
-    except MemoryError as err:
-        print("find_laser memory low: %s" % err)
-        return None
-    except Exception as err:
-        print("find_laser failed: %s" % err)
-        return None
+    if LAST_LASER:
+        dist = distance_xy(x, y, LAST_LASER["x"], LAST_LASER["y"])
+        if dist <= LASER_TRACK_BONUS_DISTANCE:
+            score += (LASER_TRACK_BONUS_DISTANCE - dist) * 5
+        else:
+            score -= min(dist, LASER_TRACK_BONUS_DISTANCE * 2)
 
-    best = None
-    best_score = -1
+    if LAST_TARGET and LASER_TARGET_BONUS_DISTANCE > 0:
+        dist = distance_xy(x, y, LAST_TARGET["x"], LAST_TARGET["y"])
+        if dist <= LASER_TARGET_BONUS_DISTANCE:
+            score += (LASER_TARGET_BONUS_DISTANCE - dist) * 2
+
+    return score
+
+
+def laser_blob_candidates(blobs, roi=None):
+    candidates = []
     for blob in blobs:
         rect = blob_rect(blob)
         x, y = laser_blob_center(blob, rect)
         w = rect[2]
         h = rect[3]
         area = rect_area(rect)
-        if LASER_USE_ROI and not point_in_roi(x, y):
+        if roi and not point_in_rect(x, y, roi):
             continue
         if area < LASER_AREA_MIN or area > LASER_AREA_MAX:
             continue
@@ -560,25 +755,75 @@ def detect_laser(img):
         if w > LASER_MAX_W or h > LASER_MAX_H:
             continue
 
+        pixels = blob_pixels(blob, area)
+        density_x100 = pixels * 100 // max(1, area)
+        if density_x100 < LASER_MIN_DENSITY_X100:
+            continue
+
         long_side = max(w, h)
         short_side = max(1, min(w, h))
         aspect_x100 = long_side * 100 // short_side
         if aspect_x100 > LASER_MAX_ASPECT_X100:
             continue
 
-        score = area * 10 - aspect_x100
-        if score > best_score:
+        score = laser_candidate_score(x, y, area, pixels, density_x100, aspect_x100)
+        candidates.append({
+            "found": True,
+            "type": "laser",
+            "x": x,
+            "y": y,
+            "rect": rect,
+            "score": score,
+            "pixels": pixels,
+            "density_x100": density_x100,
+        })
+
+    return candidates
+
+
+def select_laser_candidate(candidates):
+    best = None
+    best_score = None
+    for candidate in candidates:
+        if laser_is_static_candidate(candidate):
+            continue
+
+        score = candidate["score"]
+        if best_score is None or score > best_score:
             best_score = score
-            best = {
-                "found": True,
-                "type": "laser",
-                "x": x,
-                "y": y,
-                "rect": rect,
-                "score": score,
-            }
+            best = candidate
 
     return best
+
+
+def detect_laser(img):
+    if not ENABLE_LASER_DETECT:
+        return None
+
+    rois = laser_search_rois()
+    if laser_calibrating() and not rois:
+        update_laser_background([])
+        return None
+
+    for roi in rois:
+        try:
+            blobs = safe_find_laser_blobs(img, roi)
+        except MemoryError as err:
+            print("find_laser memory low: %s" % err)
+            return None
+        except Exception as err:
+            print("find_laser failed: %s" % err)
+            return None
+
+        candidates = laser_blob_candidates(blobs, roi)
+        if update_laser_background(candidates):
+            return None
+
+        best = select_laser_candidate(candidates)
+        if best:
+            return best
+
+    return None
 
 
 def laser_candidate_matches(candidate, raw_laser):
@@ -591,18 +836,81 @@ def laser_candidate_matches(candidate, raw_laser):
     )
 
 
-def update_laser_tracking(raw_laser):
-    global LASER_CANDIDATE, LASER_CONFIRM_COUNT
+def clone_laser(laser):
+    if not laser:
+        return None
 
-    if not ENABLE_LASER_DETECT or not raw_laser:
+    cloned = {}
+    for key in laser:
+        value = laser[key]
+        if key == "rect":
+            cloned[key] = [value[0], value[1], value[2], value[3]]
+        else:
+            cloned[key] = value
+    cloned["raw_x"] = laser["x"]
+    cloned["raw_y"] = laser["y"]
+    cloned["stable"] = False
+    return cloned
+
+
+def smooth_laser_rect(laser, smooth_x, smooth_y, raw_x, raw_y):
+    if "rect" not in laser:
+        return
+
+    dx = smooth_x - raw_x
+    dy = smooth_y - raw_y
+    laser["rect"][0] += dx
+    laser["rect"][1] += dy
+
+
+def smooth_laser(raw_laser):
+    global SMOOTHED_LASER
+
+    laser = clone_laser(raw_laser)
+    if SMOOTHED_LASER:
+        old_x = SMOOTHED_LASER["x"]
+        old_y = SMOOTHED_LASER["y"]
+        new_x = raw_laser["x"]
+        new_y = raw_laser["y"]
+        move = distance_xy(old_x, old_y, new_x, new_y)
+
+        if move <= LASER_SNAP_DISTANCE:
+            laser["x"] = weighted_value(old_x, new_x, LASER_SMOOTHING_ALPHA_X100)
+            laser["y"] = weighted_value(old_y, new_y, LASER_SMOOTHING_ALPHA_X100)
+            laser["stable"] = True
+            smooth_laser_rect(laser, laser["x"], laser["y"], new_x, new_y)
+
+    SMOOTHED_LASER = laser
+    return SMOOTHED_LASER
+
+
+def update_laser_tracking(raw_laser):
+    global LASER_CANDIDATE, LASER_CONFIRM_COUNT, SMOOTHED_LASER, LASER_LOST_COUNT
+
+    if not ENABLE_LASER_DETECT:
         LASER_CANDIDATE = None
         LASER_CONFIRM_COUNT = 0
+        SMOOTHED_LASER = None
+        LASER_LOST_COUNT = 0
+        return None
+
+    if not raw_laser:
+        LASER_CANDIDATE = None
+        LASER_CONFIRM_COUNT = 0
+        if SMOOTHED_LASER and LASER_LOST_COUNT < LASER_LOST_HOLD_FRAMES:
+            LASER_LOST_COUNT += 1
+            SMOOTHED_LASER["lost_hold"] = LASER_LOST_COUNT
+            return SMOOTHED_LASER
+
+        SMOOTHED_LASER = None
+        LASER_LOST_COUNT = LASER_LOST_HOLD_FRAMES
         return None
 
     if LASER_CONFIRM_FRAMES <= 1:
         LASER_CANDIDATE = raw_laser
         LASER_CONFIRM_COUNT = 1
-        return raw_laser
+        LASER_LOST_COUNT = 0
+        return smooth_laser(raw_laser)
 
     if laser_candidate_matches(LASER_CANDIDATE, raw_laser):
         LASER_CONFIRM_COUNT += 1
@@ -611,7 +919,8 @@ def update_laser_tracking(raw_laser):
         LASER_CONFIRM_COUNT = 1
 
     if LASER_CONFIRM_COUNT >= LASER_CONFIRM_FRAMES:
-        return raw_laser
+        LASER_LOST_COUNT = 0
+        return smooth_laser(raw_laser)
     return None
 
 
@@ -806,9 +1115,12 @@ def clone_target(target):
     return cloned
 
 
-def smooth_value(old_value, new_value):
-    alpha = TARGET_SMOOTHING_ALPHA_X100
+def weighted_value(old_value, new_value, alpha):
     return (old_value * (100 - alpha) + new_value * alpha) // 100
+
+
+def smooth_value(old_value, new_value):
+    return weighted_value(old_value, new_value, TARGET_SMOOTHING_ALPHA_X100)
 
 
 def smooth_target_rect(target, smooth_x, smooth_y, raw_x, raw_y):
@@ -1026,6 +1338,13 @@ def draw_aim_status(img, target, laser):
 
     if not ENABLE_LASER_DETECT:
         img.draw_string(8, y0 + 20, "laser: OFF", image.COLOR_BLUE)
+    elif laser_calibrating():
+        img.draw_string(
+            8,
+            y0 + 20,
+            "laser: CAL %d/%d" % (LASER_CALIB_FRAMES, LASER_BACKGROUND_CALIB_FRAMES),
+            image.COLOR_BLUE,
+        )
     elif laser:
         img.draw_string(8, y0 + 20, "laser: %s (%d,%d)" % (LASER_COLOR, laser["x"], laser["y"]), image.COLOR_BLUE)
     else:
@@ -1057,14 +1376,21 @@ def process_frame(img, fps):
     global FRAME_INDEX, LAST_TARGET, LAST_LASER
 
     FRAME_INDEX += 1
-    if DETECT_EVERY_N_FRAMES <= 1 or FRAME_INDEX % DETECT_EVERY_N_FRAMES == 0:
+    target_due = (
+        DETECT_EVERY_N_FRAMES <= 1
+        or FRAME_INDEX == 1
+        or FRAME_INDEX % DETECT_EVERY_N_FRAMES == 0
+    )
+
+    if target_due:
         raw_target = detect_target(img)
         LAST_TARGET = update_target_tracking(raw_target)
-        LAST_LASER = update_laser_tracking(detect_laser(img))
+
+    LAST_LASER = update_laser_tracking(detect_laser(img))
 
     target = LAST_TARGET
     laser = LAST_LASER
-    send_uart_target(target)
+    send_uart_result(target, laser)
     draw_debug_overlay(img, fps, target, laser)
     if PRINT_TARGET and target:
         center_x, center_y = frame_center()
