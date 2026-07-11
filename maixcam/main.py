@@ -1,4 +1,8 @@
-from maix import app, camera, display, image, time
+try:
+    from maix import app, camera, display, image, pinmap, time, uart
+except ImportError:
+    from maix import app, camera, display, image, time
+    from maix.peripheral import pinmap, uart
 
 try:
     from config import (
@@ -13,6 +17,7 @@ try:
         CROSSHAIR_SIZE,
         DETECT_EVERY_N_FRAMES,
         ENABLE_TARGET_DETECT,
+        ENABLE_UART_OUTPUT,
         GRID_LINE_WIDTH,
         ENABLE_LASER_DETECT,
         LASER_AREA_MAX,
@@ -66,6 +71,14 @@ try:
         TARGET_PERSPECTIVE_MIN_W,
         TARGET_RECT_THRESHOLD,
         TARGET_SMOOTHING_ALPHA_X100,
+        UART_BAUDRATE,
+        UART_PORT,
+        UART_PRINT_ERRORS,
+        UART_RX_FUNC,
+        UART_RX_PIN,
+        UART_SEND_EVERY_N_FRAMES,
+        UART_TX_FUNC,
+        UART_TX_PIN,
     )
 except ImportError:
     CAMERA_WIDTH = 512
@@ -132,6 +145,15 @@ except ImportError:
     TARGET_MIN_RECT_H = 20
     DETECT_EVERY_N_FRAMES = 1
     PRINT_TARGET = False
+    ENABLE_UART_OUTPUT = False
+    UART_PORT = "/dev/ttyS1"
+    UART_BAUDRATE = 115200
+    UART_TX_PIN = "A19"
+    UART_RX_PIN = "A18"
+    UART_TX_FUNC = "UART1_TX"
+    UART_RX_FUNC = "UART1_RX"
+    UART_SEND_EVERY_N_FRAMES = 2
+    UART_PRINT_ERRORS = True
 
 
 STAGE_NAME = "TARGET_DETECT"
@@ -142,6 +164,8 @@ TARGET_LOST_COUNT = 0
 LAST_LASER = None
 LASER_CANDIDATE = None
 LASER_CONFIRM_COUNT = 0
+UART_DEV = None
+UART_ERROR_PRINTED = False
 
 
 def frame_center():
@@ -207,6 +231,61 @@ def skip_camera_startup_frames(cam):
             cam.read()
         except Exception:
             return
+
+
+def init_uart_output():
+    global UART_DEV, UART_ERROR_PRINTED
+
+    if not ENABLE_UART_OUTPUT:
+        return None
+
+    try:
+        if UART_TX_PIN and UART_TX_FUNC:
+            pinmap.set_pin_function(UART_TX_PIN, UART_TX_FUNC)
+        if UART_RX_PIN and UART_RX_FUNC:
+            pinmap.set_pin_function(UART_RX_PIN, UART_RX_FUNC)
+        UART_DEV = uart.UART(UART_PORT, UART_BAUDRATE)
+        print("uart output ready: %s %d" % (UART_PORT, UART_BAUDRATE))
+    except Exception as err:
+        UART_DEV = None
+        if UART_PRINT_ERRORS and not UART_ERROR_PRINTED:
+            print("uart output init failed: %s" % err)
+            UART_ERROR_PRINTED = True
+
+    return UART_DEV
+
+
+def target_output_line(target):
+    center_x, center_y = frame_center()
+
+    if not target:
+        return "TV,0,0,0,0,0,LOST\n"
+
+    dx = target["x"] - center_x
+    dy = target["y"] - center_y
+    return "TV,1,%d,%d,%d,%d,%s\n" % (
+        dx,
+        dy,
+        target["x"],
+        target["y"],
+        target["type"],
+    )
+
+
+def send_uart_target(target):
+    global UART_ERROR_PRINTED
+
+    if not ENABLE_UART_OUTPUT or not UART_DEV:
+        return
+    if UART_SEND_EVERY_N_FRAMES > 1 and FRAME_INDEX % UART_SEND_EVERY_N_FRAMES != 0:
+        return
+
+    try:
+        UART_DEV.write_str(target_output_line(target))
+    except Exception as err:
+        if UART_PRINT_ERRORS and not UART_ERROR_PRINTED:
+            print("uart output write failed: %s" % err)
+            UART_ERROR_PRINTED = True
 
 
 def get_roi():
@@ -978,6 +1057,7 @@ def process_frame(img, fps):
 
     target = LAST_TARGET
     laser = LAST_LASER
+    send_uart_target(target)
     draw_debug_overlay(img, fps, target, laser)
     if PRINT_TARGET and target:
         center_x, center_y = frame_center()
@@ -994,6 +1074,7 @@ def main():
     cam = create_camera()
     apply_camera_tuning(cam)
     skip_camera_startup_frames(cam)
+    init_uart_output()
     disp = display.Display()
 
     while not app.need_exit():

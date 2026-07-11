@@ -55,7 +55,8 @@ cam.vflip(value)
 UART output:
 
 ```python
-uart.write_str("AIM,dx,dy,state\n")
+serial_dev = uart.UART("/dev/ttyS1", 115200)
+serial_dev.write_str("TV,1,dx,dy,x,y,perspective\n")
 ```
 
 ## Development Order
@@ -64,3 +65,9 @@ uart.write_str("AIM,dx,dy,state\n")
 2. Keep laser detection off until a real laser pointer is available.
 3. Use fixed exposure and gain if color detection drifts.
 4. Send `dx`, `dy`, and state to the main controller through UART.
+
+Protocol details:
+
+```text
+docs/uart_protocol.md
+```

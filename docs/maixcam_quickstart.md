@@ -141,6 +141,22 @@ LASER_CONFIRM_FRAMES = 3
 LASER_CONFIRM_DISTANCE = 12
 ```
 
+## UART Output
+
+UART output is available but disabled by default:
+
+```python
+ENABLE_UART_OUTPUT = False
+```
+
+When the main controller is ready, enable it in `maixcam/config.py` or in the fallback settings at the top of `maixcam/main.py`.
+
+The UART protocol is documented in:
+
+```text
+docs/uart_protocol.md
+```
+
 ## API Reference
 
 Useful MaixPy API notes are collected in:
