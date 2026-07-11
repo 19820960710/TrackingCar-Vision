@@ -69,6 +69,8 @@ Use these modes while testing:
 
 Use `auto` only after `blob`, `circle`, or `rect` works stably. If you see fast frame buffer memory errors, lower resolution or avoid `auto`.
 
+For blob targets, the red outline uses blob corner points when MaixPy provides them. This is better than a plain axis-aligned rectangle when the camera views the target at an angle.
+
 ## Target Smoothing
 
 The displayed target center is smoothed before use:
