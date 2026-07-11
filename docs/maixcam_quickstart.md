@@ -44,7 +44,26 @@ After preview works:
 - center crosshair
 - 3x3 guide grid
 - center ROI rectangle
+- detected target center
+- target offset from image center
 - FPS state
 - image size and coordinate direction
 
 The ROI is centered and covers 80% of the image by default. Change `ROI_SCALE_NUM` and `ROI_SCALE_DEN` in `maixcam/config.py` if needed.
+
+## Target Detection
+
+`maixcam/main.py` uses MaixPy built-in `find_circles` and `find_rects` first. The current default is:
+
+```python
+ENABLE_TARGET_DETECT = True
+TARGET_MODE = "auto"
+```
+
+Use these modes while testing:
+
+- `auto`: detect circles and rectangles, then choose the stronger result
+- `circle`: only detect circular targets
+- `rect`: only detect rectangular targets
+
+If FPS drops too much, change `TARGET_MODE` from `auto` to the exact target shape.
