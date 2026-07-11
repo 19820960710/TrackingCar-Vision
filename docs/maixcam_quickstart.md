@@ -67,3 +67,11 @@ Use these modes while testing:
 - `rect`: only detect rectangular targets
 
 If FPS drops too much, change `TARGET_MODE` from `auto` to the exact target shape.
+
+## API Reference
+
+Useful MaixPy API notes are collected in:
+
+```text
+docs/maixpy_api_notes.md
+```
