@@ -25,9 +25,13 @@ The main program also uses low-latency camera buffering and skips a few startup 
 CAMERA_BUFFER_NUM = 1
 CAMERA_SKIP_FRAMES = 5
 CAMERA_CONTRAST = -1
+PRINT_FPS = False
+SHOW_GRID = False
+SHOW_ROI = False
 ```
 
 `CAMERA_CONTRAST = -1` means the program will not force camera contrast by default. Only tune it after the target center is already basically correct.
+`PRINT_FPS = False` keeps the IDE output window quiet; the screen still shows FPS.
 
 ## Next Vision Stages
 
@@ -90,6 +94,18 @@ TARGET_BLOB_CENTER_METHOD = "rect"
 ```
 
 When four corners are found, the red outline follows the tilted quadrilateral and the target center is the diagonal intersection. If corners are not found, the program falls back to blob detection so the preview still runs.
+
+For speed and stability, the perspective mode uses a small search window after the target has been found:
+
+```python
+TARGET_FAST_ROI_ENABLE = True
+TARGET_FAST_ROI_PADDING = 72
+TARGET_FULL_SCAN_INTERVAL = 10
+TARGET_JUMP_REJECT_ENABLE = True
+TARGET_MAX_CENTER_JUMP = 80
+```
+
+If the target moves very fast and is lost, lower `TARGET_FULL_SCAN_INTERVAL`. If the center is still jumpy, lower `TARGET_MAX_CENTER_JUMP`.
 
 ## Target Smoothing
 

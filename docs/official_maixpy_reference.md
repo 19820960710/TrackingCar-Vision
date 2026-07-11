@@ -16,6 +16,8 @@ The current `maixcam/main.py` stays as a lightweight real-time baseline:
 - Fall back to blob detection only when the four-corner target is not found.
 - Draw the tilted quadrilateral outline when perspective corners are available.
 - Use `buff_num=1` to reduce camera capture latency.
+- Search near the last perspective target most frames, with periodic full scans for recovery.
+- Reject sudden target jumps while the last perspective target is still reliable.
 - Skip the first few camera frames after startup.
 - Keep camera contrast configurable, but disabled by default.
 - Keep laser detection disabled by default until a real laser pointer is available.
@@ -57,6 +59,9 @@ If the target center jumps, keep the red box on for checking the detected center
 ```python
 TARGET_MODE = "perspective"
 TARGET_PERSPECTIVE_FALLBACK_BLOB = True
+TARGET_FAST_ROI_ENABLE = True
+TARGET_FULL_SCAN_INTERVAL = 10
+TARGET_JUMP_REJECT_ENABLE = True
 SHOW_TARGET_BOX = True
 TARGET_BLOB_CENTER_METHOD = "rect"
 ```
