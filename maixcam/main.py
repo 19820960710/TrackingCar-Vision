@@ -31,6 +31,7 @@ try:
         SHOW_GRID,
         SHOW_ROI,
         SHOW_STATUS_TEXT,
+        SHOW_TARGET_BOX,
         TARGET_CIRCLE_THRESHOLD,
         TARGET_BLOB_AREA_MIN,
         TARGET_BLOB_MAX_ASPECT_X100,
@@ -56,6 +57,7 @@ except ImportError:
     SHOW_GRID = True
     SHOW_ROI = True
     SHOW_STATUS_TEXT = True
+    SHOW_TARGET_BOX = False
     CROSSHAIR_SIZE = 24
     GRID_LINE_WIDTH = 1
     ENABLE_LASER_DETECT = True
@@ -203,33 +205,15 @@ def blob_rect(blob):
     return [blob.x(), blob.y(), blob.w(), blob.h()]
 
 
-def blob_corners(blob):
-    try:
-        corners = blob.corners()
-        if corners and len(corners) >= 4:
-            return [
-                [corners[0][0], corners[0][1]],
-                [corners[1][0], corners[1][1]],
-                [corners[2][0], corners[2][1]],
-                [corners[3][0], corners[3][1]],
-            ]
-    except Exception:
-        pass
-
-    return None
-
-
 def rect_center(rect):
     return rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
 
 
-def corners_center(corners):
-    x_sum = 0
-    y_sum = 0
-    for corner in corners:
-        x_sum += corner[0]
-        y_sum += corner[1]
-    return x_sum // len(corners), y_sum // len(corners)
+def blob_center(blob, rect):
+    try:
+        return blob.cx(), blob.cy()
+    except Exception:
+        return rect_center(rect)
 
 
 def rect_area(rect):
@@ -251,11 +235,7 @@ def detect_blobs(img):
     best_score = -1
     for blob in blobs:
         rect = blob_rect(blob)
-        corners = blob_corners(blob)
-        if corners:
-            x, y = corners_center(corners)
-        else:
-            x, y = rect_center(rect)
+        x, y = blob_center(blob, rect)
         w = rect[2]
         h = rect[3]
         if not point_in_roi(x, y):
@@ -280,7 +260,6 @@ def detect_blobs(img):
                 "x": x,
                 "y": y,
                 "rect": rect,
-                "corners": corners,
                 "score": score,
             }
 
@@ -454,13 +433,6 @@ def clone_target(target):
         value = target[key]
         if key == "rect":
             cloned[key] = [value[0], value[1], value[2], value[3]]
-        elif key == "corners" and value:
-            cloned[key] = [
-                [value[0][0], value[0][1]],
-                [value[1][0], value[1][1]],
-                [value[2][0], value[2][1]],
-                [value[3][0], value[3][1]],
-            ]
         else:
             cloned[key] = value
     cloned["raw_x"] = target["x"]
@@ -484,11 +456,6 @@ def smooth_target_rect(target, smooth_x, smooth_y, raw_x, raw_y):
         rect = target["rect"]
         rect[0] += dx
         rect[1] += dy
-
-    if "corners" in target and target["corners"]:
-        for corner in target["corners"]:
-            corner[0] += dx
-            corner[1] += dy
 
 
 def update_target_tracking(raw_target):
@@ -602,10 +569,15 @@ def draw_target_marker(img, target):
     dy = y - center_y
 
     if target["type"] == "circle":
-        img.draw_circle(x, y, target["radius"], image.COLOR_RED, 2)
+        if SHOW_TARGET_BOX:
+            img.draw_circle(x, y, target["radius"], image.COLOR_RED, 2)
     elif target["type"] == "blob":
-        corners = target.get("corners", None)
-        if corners:
+        if SHOW_TARGET_BOX:
+            rect = target["rect"]
+            img.draw_rect(rect[0], rect[1], rect[2], rect[3], image.COLOR_RED, 2)
+    elif target["type"] == "rect":
+        if SHOW_TARGET_BOX:
+            corners = target["corners"]
             for i in range(4):
                 img.draw_line(
                     corners[i][0],
@@ -615,20 +587,6 @@ def draw_target_marker(img, target):
                     image.COLOR_RED,
                     2,
                 )
-        else:
-            rect = target["rect"]
-            img.draw_rect(rect[0], rect[1], rect[2], rect[3], image.COLOR_RED, 2)
-    elif target["type"] == "rect":
-        corners = target["corners"]
-        for i in range(4):
-            img.draw_line(
-                corners[i][0],
-                corners[i][1],
-                corners[(i + 1) % 4][0],
-                corners[(i + 1) % 4][1],
-                image.COLOR_RED,
-                2,
-            )
 
     img.draw_line(x - 12, y, x + 12, y, image.COLOR_RED, 2)
     img.draw_line(x, y - 12, x, y + 12, image.COLOR_RED, 2)
