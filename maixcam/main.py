@@ -18,6 +18,12 @@ try:
         SHOW_ROI,
         SHOW_STATUS_TEXT,
         TARGET_CIRCLE_THRESHOLD,
+        TARGET_BLOB_AREA_MIN,
+        TARGET_BLOB_MAX_ASPECT_X100,
+        TARGET_BLOB_MIN_H,
+        TARGET_BLOB_MIN_W,
+        TARGET_BLOB_PIXELS_MIN,
+        TARGET_BLOB_THRESHOLDS,
         TARGET_MAX_RADIUS,
         TARGET_MIN_RADIUS,
         TARGET_MIN_RECT_H,
@@ -39,14 +45,20 @@ except ImportError:
     ROI_SCALE_NUM = 3
     ROI_SCALE_DEN = 5
     ENABLE_TARGET_DETECT = True
-    TARGET_MODE = "circle"
+    TARGET_MODE = "blob"
+    TARGET_BLOB_THRESHOLDS = [[0, 45, -128, 127, -128, 127]]
+    TARGET_BLOB_AREA_MIN = 80
+    TARGET_BLOB_PIXELS_MIN = 80
+    TARGET_BLOB_MIN_W = 6
+    TARGET_BLOB_MIN_H = 6
+    TARGET_BLOB_MAX_ASPECT_X100 = 350
     TARGET_CIRCLE_THRESHOLD = 3000
     TARGET_RECT_THRESHOLD = 10000
     TARGET_MIN_RADIUS = 8
     TARGET_MAX_RADIUS = 110
     TARGET_MIN_RECT_W = 20
     TARGET_MIN_RECT_H = 20
-    DETECT_EVERY_N_FRAMES = 2
+    DETECT_EVERY_N_FRAMES = 1
     PRINT_TARGET = False
 
 
@@ -93,6 +105,87 @@ def safe_find_rects(img):
         return img.find_rects(roi=roi, threshold=TARGET_RECT_THRESHOLD)
     except TypeError:
         return img.find_rects(threshold=TARGET_RECT_THRESHOLD)
+
+
+def safe_find_blobs(img):
+    roi = get_roi()
+    try:
+        return img.find_blobs(
+            TARGET_BLOB_THRESHOLDS,
+            roi=roi,
+            area_threshold=TARGET_BLOB_AREA_MIN,
+            pixels_threshold=TARGET_BLOB_PIXELS_MIN,
+        )
+    except TypeError:
+        return img.find_blobs(
+            TARGET_BLOB_THRESHOLDS,
+            area_threshold=TARGET_BLOB_AREA_MIN,
+            pixels_threshold=TARGET_BLOB_PIXELS_MIN,
+        )
+
+
+def blob_rect(blob):
+    try:
+        return blob.rect()
+    except Exception:
+        pass
+
+    try:
+        return [blob[0], blob[1], blob[2], blob[3]]
+    except Exception:
+        pass
+
+    return [blob.x(), blob.y(), blob.w(), blob.h()]
+
+
+def rect_center(rect):
+    return rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
+
+
+def detect_blobs(img):
+    try:
+        blobs = safe_find_blobs(img)
+    except MemoryError as err:
+        print("find_blobs memory low: %s" % err)
+        return None
+    except Exception as err:
+        print("find_blobs failed: %s" % err)
+        return None
+
+    center_x, center_y = frame_center()
+    best = None
+    best_score = -1
+    for blob in blobs:
+        rect = blob_rect(blob)
+        x, y = rect_center(rect)
+        w = rect[2]
+        h = rect[3]
+        if not point_in_roi(x, y):
+            continue
+        if w < TARGET_BLOB_MIN_W or h < TARGET_BLOB_MIN_H:
+            continue
+
+        long_side = max(w, h)
+        short_side = max(1, min(w, h))
+        aspect_x100 = long_side * 100 // short_side
+        if aspect_x100 > TARGET_BLOB_MAX_ASPECT_X100:
+            continue
+
+        area = w * h
+        distance_penalty = abs(x - center_x) + abs(y - center_y)
+        score = area - distance_penalty
+        if score > best_score:
+            best_score = score
+            best = {
+                "found": True,
+                "type": "blob",
+                "x": x,
+                "y": y,
+                "rect": rect,
+                "score": score,
+            }
+
+    return best
 
 
 def detect_circles(img):
@@ -175,16 +268,26 @@ def detect_target(img):
         return None
 
     mode = TARGET_MODE
+    blob_target = None
     circle_target = None
     rect_target = None
 
+    if mode == "blob" or mode == "auto":
+        blob_target = detect_blobs(img)
     if mode == "circle" or mode == "auto":
         circle_target = detect_circles(img)
     if mode == "rect" or mode == "auto":
         rect_target = detect_rects(img)
 
-    if circle_target and rect_target:
-        return circle_target if circle_target["score"] >= rect_target["score"] else rect_target
+    if mode == "auto":
+        best = None
+        for target in (blob_target, circle_target, rect_target):
+            if target and (best is None or target["score"] > best["score"]):
+                best = target
+        return best
+
+    if blob_target:
+        return blob_target
     if circle_target:
         return circle_target
     if rect_target:
@@ -274,6 +377,9 @@ def draw_target_marker(img, target):
 
     if target["type"] == "circle":
         img.draw_circle(x, y, target["radius"], image.COLOR_RED, 2)
+    elif target["type"] == "blob":
+        rect = target["rect"]
+        img.draw_rect(rect[0], rect[1], rect[2], rect[3], image.COLOR_RED, 2)
     elif target["type"] == "rect":
         corners = target["corners"]
         for i in range(4):

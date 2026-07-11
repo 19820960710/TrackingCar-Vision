@@ -53,20 +53,21 @@ The ROI is centered and covers 80% of the image by default. Change `ROI_SCALE_NU
 
 ## Target Detection
 
-`maixcam/main.py` uses MaixPy built-in `find_circles` and `find_rects` first. The current safe default is:
+`maixcam/main.py` uses MaixPy built-in `find_blobs` first. The current fast default is:
 
 ```python
 ENABLE_TARGET_DETECT = True
-TARGET_MODE = "circle"
+TARGET_MODE = "blob"
 ```
 
 Use these modes while testing:
 
+- `blob`: fast dark/black target candidate detection
 - `circle`: only detect circular targets
 - `rect`: only detect rectangular targets
-- `auto`: detect circles and rectangles, then choose the stronger result
+- `auto`: detect blobs, circles, and rectangles, then choose the stronger result
 
-Use `auto` only after `circle` or `rect` works stably. If you see fast frame buffer memory errors, lower resolution or avoid `auto`.
+Use `auto` only after `blob`, `circle`, or `rect` works stably. If you see fast frame buffer memory errors, lower resolution or avoid `auto`.
 
 ## API Reference
 
