@@ -10,14 +10,14 @@
 
 ## Recommended First Settings
 
-Use this first for a clearer preview:
+Use this first for a clear preview:
 
 ```python
-CAMERA_WIDTH = 512
-CAMERA_HEIGHT = 320
+CAMERA_WIDTH = 640
+CAMERA_HEIGHT = 480
 ```
 
-This matches Sipeed's common MaixCam camera preview example and gives better detail than `320x240`. If recognition becomes slow later, reduce it back to `320x240`.
+This gives a clearer image for early debugging. If recognition becomes slow later, reduce it to `512x320` or `320x240`.
 
 ## Next Vision Stages
 

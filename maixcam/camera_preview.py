@@ -1,7 +1,7 @@
 from maix import app, camera, display, image, time
 
-CAMERA_WIDTH = 512
-CAMERA_HEIGHT = 320
+CAMERA_WIDTH = 640
+CAMERA_HEIGHT = 480
 SHOW_FPS = True
 PRINT_FPS = True
 
