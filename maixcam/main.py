@@ -98,21 +98,21 @@ except ImportError:
     SHOW_TARGET_BOX = True
     CROSSHAIR_SIZE = 24
     GRID_LINE_WIDTH = 1
-    ENABLE_LASER_DETECT = False
-    LASER_COLOR = "red"
+    ENABLE_LASER_DETECT = True
+    LASER_COLOR = "green"
     LASER_RED_THRESHOLDS = [[70, 100, 35, 127, -20, 127]]
-    LASER_GREEN_THRESHOLDS = [[40, 100, -128, -15, -20, 80]]
+    LASER_GREEN_THRESHOLDS = [[65, 100, -128, -20, -20, 90]]
     LASER_USE_ROI = True
     LASER_AREA_MIN = 2
-    LASER_AREA_MAX = 120
+    LASER_AREA_MAX = 90
     LASER_PIXELS_MIN = 2
     LASER_MIN_W = 1
     LASER_MIN_H = 1
-    LASER_MAX_W = 30
-    LASER_MAX_H = 30
+    LASER_MAX_W = 24
+    LASER_MAX_H = 24
     LASER_MAX_ASPECT_X100 = 300
-    LASER_CONFIRM_FRAMES = 3
-    LASER_CONFIRM_DISTANCE = 12
+    LASER_CONFIRM_FRAMES = 2
+    LASER_CONFIRM_DISTANCE = 18
     PRINT_LASER = False
     ROI_SCALE_NUM = 4
     ROI_SCALE_DEN = 5
@@ -399,6 +399,13 @@ def blob_center(blob, rect):
         return rect_center(rect)
 
 
+def laser_blob_center(blob, rect):
+    try:
+        return blob.cx(), blob.cy()
+    except Exception:
+        return rect_center(rect)
+
+
 def rect_area(rect):
     return rect[2] * rect[3]
 
@@ -540,7 +547,7 @@ def detect_laser(img):
     best_score = -1
     for blob in blobs:
         rect = blob_rect(blob)
-        x, y = rect_center(rect)
+        x, y = laser_blob_center(blob, rect)
         w = rect[2]
         h = rect[3]
         area = rect_area(rect)

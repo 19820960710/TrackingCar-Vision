@@ -59,6 +59,12 @@ serial_dev = uart.UART("/dev/ttyS1", 115200)
 serial_dev.write_str("TV,1,dx,dy,x,y,perspective\n")
 ```
 
+Green laser threshold:
+
+```python
+LASER_GREEN_THRESHOLDS = [[65, 100, -128, -20, -20, 90]]
+```
+
 ## Development Order
 
 1. Make target detection stable with `find_blobs` first.

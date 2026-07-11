@@ -104,13 +104,14 @@ Increase `TARGET_SMOOTHING_ALPHA_X100` for faster response. Decrease it for less
 
 ## Laser Detection
 
-`maixcam/main.py` can detect the laser spot with `find_blobs`, but laser detection is off by default until a real laser pointer is available.
+`maixcam/main.py` detects the laser spot with `find_blobs`. The current default is a green laser pointer.
 
 Default settings:
 
 ```python
-ENABLE_LASER_DETECT = False
-LASER_COLOR = "red"
+ENABLE_LASER_DETECT = True
+LASER_COLOR = "green"
+LASER_GREEN_THRESHOLDS = [[65, 100, -128, -20, -20, 90]]
 ```
 
 The screen shows:
@@ -126,10 +127,10 @@ aim dx = target_x - laser_x
 aim dy = target_y - laser_y
 ```
 
-If you use a green laser, change:
+If you switch back to a red laser, change:
 
 ```python
-LASER_COLOR = "green"
+LASER_COLOR = "red"
 ```
 
 If the laser is not detected, tune `LASER_RED_THRESHOLDS` or `LASER_GREEN_THRESHOLDS`.
@@ -137,8 +138,8 @@ If the laser is not detected, tune `LASER_RED_THRESHOLDS` or `LASER_GREEN_THRESH
 Laser detection also requires a candidate to appear for several frames before it is reported:
 
 ```python
-LASER_CONFIRM_FRAMES = 3
-LASER_CONFIRM_DISTANCE = 12
+LASER_CONFIRM_FRAMES = 2
+LASER_CONFIRM_DISTANCE = 18
 ```
 
 ## UART Output
