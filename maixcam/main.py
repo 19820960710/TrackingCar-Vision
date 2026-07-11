@@ -24,12 +24,14 @@ try:
         TARGET_BLOB_MIN_W,
         TARGET_BLOB_PIXELS_MIN,
         TARGET_BLOB_THRESHOLDS,
+        TARGET_LOST_HOLD_FRAMES,
         TARGET_MAX_RADIUS,
         TARGET_MIN_RADIUS,
         TARGET_MIN_RECT_H,
         TARGET_MIN_RECT_W,
         TARGET_MODE,
         TARGET_RECT_THRESHOLD,
+        TARGET_SMOOTHING_ALPHA_X100,
     )
 except ImportError:
     CAMERA_WIDTH = 512
@@ -52,6 +54,8 @@ except ImportError:
     TARGET_BLOB_MIN_W = 6
     TARGET_BLOB_MIN_H = 6
     TARGET_BLOB_MAX_ASPECT_X100 = 350
+    TARGET_SMOOTHING_ALPHA_X100 = 35
+    TARGET_LOST_HOLD_FRAMES = 5
     TARGET_CIRCLE_THRESHOLD = 3000
     TARGET_RECT_THRESHOLD = 10000
     TARGET_MIN_RADIUS = 8
@@ -65,6 +69,8 @@ except ImportError:
 STAGE_NAME = "TARGET_DETECT"
 FRAME_INDEX = 0
 LAST_TARGET = None
+SMOOTHED_TARGET = None
+TARGET_LOST_COUNT = 0
 
 
 def frame_center():
@@ -295,6 +301,68 @@ def detect_target(img):
     return None
 
 
+def clone_target(target):
+    if not target:
+        return None
+
+    cloned = {}
+    for key in target:
+        value = target[key]
+        if key == "rect":
+            cloned[key] = [value[0], value[1], value[2], value[3]]
+        else:
+            cloned[key] = value
+    cloned["raw_x"] = target["x"]
+    cloned["raw_y"] = target["y"]
+    cloned["stable"] = False
+    return cloned
+
+
+def smooth_value(old_value, new_value):
+    alpha = TARGET_SMOOTHING_ALPHA_X100
+    return (old_value * (100 - alpha) + new_value * alpha) // 100
+
+
+def smooth_target_rect(target, smooth_x, smooth_y, raw_x, raw_y):
+    if "rect" not in target:
+        return
+
+    rect = target["rect"]
+    rect[0] += smooth_x - raw_x
+    rect[1] += smooth_y - raw_y
+
+
+def update_target_tracking(raw_target):
+    global SMOOTHED_TARGET, TARGET_LOST_COUNT
+
+    if raw_target:
+        if SMOOTHED_TARGET and SMOOTHED_TARGET["type"] == raw_target["type"]:
+            target = clone_target(raw_target)
+            old_x = SMOOTHED_TARGET["x"]
+            old_y = SMOOTHED_TARGET["y"]
+            new_x = raw_target["x"]
+            new_y = raw_target["y"]
+            target["x"] = smooth_value(old_x, new_x)
+            target["y"] = smooth_value(old_y, new_y)
+            target["stable"] = True
+            smooth_target_rect(target, target["x"], target["y"], new_x, new_y)
+            SMOOTHED_TARGET = target
+        else:
+            SMOOTHED_TARGET = clone_target(raw_target)
+        TARGET_LOST_COUNT = 0
+        return SMOOTHED_TARGET
+
+    if SMOOTHED_TARGET and TARGET_LOST_COUNT < TARGET_LOST_HOLD_FRAMES:
+        TARGET_LOST_COUNT += 1
+        SMOOTHED_TARGET["stable"] = True
+        SMOOTHED_TARGET["lost_hold"] = TARGET_LOST_COUNT
+        return SMOOTHED_TARGET
+
+    TARGET_LOST_COUNT = TARGET_LOST_HOLD_FRAMES
+    SMOOTHED_TARGET = None
+    return None
+
+
 def draw_center_guide(img):
     if SHOW_CENTER_GUIDE:
         center_x, center_y = frame_center()
@@ -399,6 +467,9 @@ def draw_target_marker(img, target):
     img.draw_string(8, CAMERA_HEIGHT - 44, "target: %s (%d,%d)" % (target["type"], x, y), image.COLOR_RED)
     img.draw_string(8, CAMERA_HEIGHT - 24, "offset: dx=%d dy=%d" % (dx, dy), image.COLOR_RED)
 
+    if "raw_x" in target and (target["raw_x"] != x or target["raw_y"] != y):
+        img.draw_circle(target["raw_x"], target["raw_y"], 4, image.COLOR_YELLOW, 1)
+
 
 def draw_debug_overlay(img, fps, target):
     draw_grid(img)
@@ -414,7 +485,8 @@ def process_frame(img, fps):
 
     FRAME_INDEX += 1
     if DETECT_EVERY_N_FRAMES <= 1 or FRAME_INDEX % DETECT_EVERY_N_FRAMES == 0:
-        LAST_TARGET = detect_target(img)
+        raw_target = detect_target(img)
+        LAST_TARGET = update_target_tracking(raw_target)
 
     target = LAST_TARGET
     draw_debug_overlay(img, fps, target)

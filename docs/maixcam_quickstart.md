@@ -69,6 +69,17 @@ Use these modes while testing:
 
 Use `auto` only after `blob`, `circle`, or `rect` works stably. If you see fast frame buffer memory errors, lower resolution or avoid `auto`.
 
+## Target Smoothing
+
+The displayed target center is smoothed before use:
+
+```python
+TARGET_SMOOTHING_ALPHA_X100 = 35
+TARGET_LOST_HOLD_FRAMES = 5
+```
+
+Increase `TARGET_SMOOTHING_ALPHA_X100` for faster response. Decrease it for less jitter. `TARGET_LOST_HOLD_FRAMES` keeps the last target briefly when detection drops for a few frames.
+
 ## API Reference
 
 Useful MaixPy API notes are collected in:
