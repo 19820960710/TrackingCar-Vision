@@ -13,10 +13,10 @@ The current `maixcam/main.py` stays as a lightweight real-time baseline:
 - Use `find_blobs` with LAB thresholds to detect dark target candidates.
 - Use ROI, area threshold, and pixel threshold to reduce false candidates.
 - Use `blob.cx()` and `blob.cy()` as the center when available.
-- Hide the red blob box by default because the box can deform heavily when the camera is tilted.
+- Draw a stable red display box around the detected center instead of using the raw blob bounding box.
 - Use `buff_num=1` to reduce camera capture latency.
 - Skip the first few camera frames after startup.
-- Keep camera contrast configurable.
+- Keep camera contrast configurable, but disabled by default.
 
 ## Official 2025 E Demo Takeaways
 
@@ -44,16 +44,16 @@ This is the right long-term direction for solving the tilted-camera problem. It 
 
 ## Notes For Testing
 
-If the screen becomes too dark or edges become too harsh, lower:
+By default, do not force camera contrast:
 
 ```python
-CAMERA_CONTRAST = 50
+CAMERA_CONTRAST = -1
 ```
 
-If the target center jumps, first keep:
+If the target center jumps, keep the red box on for checking the detected center:
 
 ```python
-SHOW_TARGET_BOX = False
+SHOW_TARGET_BOX = True
 ```
 
 Then tune:

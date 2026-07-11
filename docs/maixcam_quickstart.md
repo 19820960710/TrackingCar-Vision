@@ -24,10 +24,10 @@ The main program also uses low-latency camera buffering and skips a few startup 
 ```python
 CAMERA_BUFFER_NUM = 1
 CAMERA_SKIP_FRAMES = 5
-CAMERA_CONTRAST = 80
+CAMERA_CONTRAST = -1
 ```
 
-If the image becomes too dark or the black edges look too harsh, lower `CAMERA_CONTRAST` first.
+`CAMERA_CONTRAST = -1` means the program will not force camera contrast by default. Only tune it after the target center is already basically correct.
 
 ## Next Vision Stages
 
@@ -79,13 +79,13 @@ Use these modes while testing:
 
 Use `auto` only after `blob`, `circle`, or `rect` works stably. If you see fast frame buffer memory errors, lower resolution or avoid `auto`.
 
-For blob targets, the default output is center-first. The red outline is hidden by default because blob corner points can become unstable when the camera views the target at an angle.
+For blob targets, the default output is center-first. The red box is drawn around the detected center instead of using blob corner points, because blob corners can become unstable when the camera views the target at an angle.
 
 ```python
-SHOW_TARGET_BOX = False
+SHOW_TARGET_BOX = True
 ```
 
-Keep it off when tuning center accuracy. Turn it on only when you need to inspect the candidate bounding box.
+The red box is a stable display box centered on the detected point. It is not the raw blob bounding box, so it will not stretch badly when the camera is tilted.
 
 ## Target Smoothing
 

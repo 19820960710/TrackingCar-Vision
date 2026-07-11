@@ -38,6 +38,9 @@ try:
         SHOW_ROI,
         SHOW_STATUS_TEXT,
         SHOW_TARGET_BOX,
+        TARGET_MARKER_BOX_MAX_SIZE,
+        TARGET_MARKER_BOX_MIN_SIZE,
+        TARGET_MARKER_BOX_PADDING,
         TARGET_CIRCLE_THRESHOLD,
         TARGET_BLOB_AREA_MIN,
         TARGET_BLOB_MAX_ASPECT_X100,
@@ -59,7 +62,7 @@ except ImportError:
     CAMERA_HEIGHT = 320
     CAMERA_BUFFER_NUM = 1
     CAMERA_SKIP_FRAMES = 5
-    CAMERA_CONTRAST = 80
+    CAMERA_CONTRAST = -1
     CAMERA_EXPOSURE = -1
     CAMERA_GAIN = -1
     CAMERA_WB_GAIN = []
@@ -69,7 +72,7 @@ except ImportError:
     SHOW_GRID = True
     SHOW_ROI = True
     SHOW_STATUS_TEXT = True
-    SHOW_TARGET_BOX = False
+    SHOW_TARGET_BOX = True
     CROSSHAIR_SIZE = 24
     GRID_LINE_WIDTH = 1
     ENABLE_LASER_DETECT = True
@@ -88,6 +91,9 @@ except ImportError:
     PRINT_LASER = False
     ROI_SCALE_NUM = 4
     ROI_SCALE_DEN = 5
+    TARGET_MARKER_BOX_MIN_SIZE = 56
+    TARGET_MARKER_BOX_PADDING = 18
+    TARGET_MARKER_BOX_MAX_SIZE = 160
     ENABLE_TARGET_DETECT = True
     TARGET_MODE = "blob"
     TARGET_BLOB_THRESHOLDS = [[0, 45, -128, 127, -128, 127]]
@@ -631,6 +637,41 @@ def draw_status_text(img, fps):
     img.draw_string(8, 128, "x->right  y->down", image.COLOR_GREEN)
 
 
+def clip_rect_to_frame(x, y, w, h):
+    left = max(0, x)
+    top = max(0, y)
+    right = min(CAMERA_WIDTH - 1, x + w)
+    bottom = min(CAMERA_HEIGHT - 1, y + h)
+    clipped_w = right - left
+    clipped_h = bottom - top
+    if clipped_w <= 0 or clipped_h <= 0:
+        return None
+    return [left, top, clipped_w, clipped_h]
+
+
+def target_marker_box_size(target):
+    size = TARGET_MARKER_BOX_MIN_SIZE
+    if "radius" in target:
+        size = max(size, target["radius"] * 2)
+    if "rect" in target:
+        rect = target["rect"]
+        size = max(size, rect[2], rect[3])
+
+    size += TARGET_MARKER_BOX_PADDING * 2
+    return min(size, TARGET_MARKER_BOX_MAX_SIZE)
+
+
+def draw_stable_target_box(img, target, x, y):
+    if not SHOW_TARGET_BOX:
+        return
+
+    size = target_marker_box_size(target)
+    half = size // 2
+    rect = clip_rect_to_frame(x - half, y - half, size, size)
+    if rect:
+        img.draw_rect(rect[0], rect[1], rect[2], rect[3], image.COLOR_RED, 2)
+
+
 def draw_target_marker(img, target):
     if not target:
         return
@@ -638,28 +679,8 @@ def draw_target_marker(img, target):
     center_x, center_y = frame_center()
     x = target["x"]
     y = target["y"]
-    dx = x - center_x
-    dy = y - center_y
 
-    if target["type"] == "circle":
-        if SHOW_TARGET_BOX:
-            img.draw_circle(x, y, target["radius"], image.COLOR_RED, 2)
-    elif target["type"] == "blob":
-        if SHOW_TARGET_BOX:
-            rect = target["rect"]
-            img.draw_rect(rect[0], rect[1], rect[2], rect[3], image.COLOR_RED, 2)
-    elif target["type"] == "rect":
-        if SHOW_TARGET_BOX:
-            corners = target["corners"]
-            for i in range(4):
-                img.draw_line(
-                    corners[i][0],
-                    corners[i][1],
-                    corners[(i + 1) % 4][0],
-                    corners[(i + 1) % 4][1],
-                    image.COLOR_RED,
-                    2,
-                )
+    draw_stable_target_box(img, target, x, y)
 
     img.draw_line(x - 12, y, x + 12, y, image.COLOR_RED, 2)
     img.draw_line(x, y - 12, x, y + 12, image.COLOR_RED, 2)
