@@ -22,7 +22,7 @@ Expected result:
 ## File Roles
 
 - `camera_preview.py`: first-stage camera preview
-- `main.py`: project entry for later target detection and aiming logic
+- `main.py`: project entry with center crosshair and coordinate debug overlay
 - `config.py`: device-side resolution and debug settings
 
 Keep PC OpenCV code under `scripts/` and MaixPy code under `maixcam/`.

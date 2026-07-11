@@ -23,7 +23,14 @@ This matches Sipeed's common MaixCam camera preview example and gives better det
 
 After preview works:
 
-1. Add target detection in `maixcam/main.py`.
-2. Add laser spot detection.
-3. Calculate `dx` and `dy`.
-4. Send aiming data to the main controller by UART.
+1. Run `maixcam/main.py` and confirm the center crosshair is displayed.
+2. Add target detection in `maixcam/main.py`.
+3. Add laser spot detection.
+4. Calculate `dx` and `dy`.
+5. Send aiming data to the main controller by UART.
+
+## Code Roles
+
+- Keep `maixcam/camera_preview.py` as the simplest camera test.
+- Use `maixcam/main.py` for the real vision pipeline.
+- Keep PC-only OpenCV helper scripts under `scripts/`.
