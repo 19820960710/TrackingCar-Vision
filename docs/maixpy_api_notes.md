@@ -6,6 +6,12 @@ Official API reference:
 https://wiki.sipeed.com/maixpy/api/
 ```
 
+Project reference notes:
+
+```text
+docs/official_maixpy_reference.md
+```
+
 ## Useful Modules
 
 - `maix.camera`: camera open, frame read, exposure, gain, mirror, flip
@@ -37,8 +43,11 @@ img.draw_string(x, y, "text", image.COLOR_GREEN)
 Camera tuning:
 
 ```python
+cam = camera.Camera(width, height, buff_num=1)
+cam.skip_frames(5)
 cam.exposure(value)
 cam.gain(value)
+cam.constrast(value)
 cam.hmirror(value)
 cam.vflip(value)
 ```

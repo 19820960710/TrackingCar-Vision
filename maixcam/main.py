@@ -3,6 +3,12 @@ from maix import app, camera, display, image, time
 try:
     from config import (
         CAMERA_HEIGHT,
+        CAMERA_BUFFER_NUM,
+        CAMERA_CONTRAST,
+        CAMERA_EXPOSURE,
+        CAMERA_GAIN,
+        CAMERA_SKIP_FRAMES,
+        CAMERA_WB_GAIN,
         CAMERA_WIDTH,
         CROSSHAIR_SIZE,
         DETECT_EVERY_N_FRAMES,
@@ -51,6 +57,12 @@ try:
 except ImportError:
     CAMERA_WIDTH = 512
     CAMERA_HEIGHT = 320
+    CAMERA_BUFFER_NUM = 1
+    CAMERA_SKIP_FRAMES = 5
+    CAMERA_CONTRAST = 80
+    CAMERA_EXPOSURE = -1
+    CAMERA_GAIN = -1
+    CAMERA_WB_GAIN = []
     SHOW_FPS = True
     PRINT_FPS = True
     SHOW_CENTER_GUIDE = True
@@ -106,6 +118,67 @@ LAST_LASER = None
 
 def frame_center():
     return CAMERA_WIDTH // 2, CAMERA_HEIGHT // 2
+
+
+def create_camera():
+    try:
+        return camera.Camera(CAMERA_WIDTH, CAMERA_HEIGHT, buff_num=CAMERA_BUFFER_NUM)
+    except TypeError:
+        print("camera buff_num not supported, fallback to default buffer")
+        return camera.Camera(CAMERA_WIDTH, CAMERA_HEIGHT)
+
+
+def camera_setting_enabled(value):
+    return value is not None and value >= 0
+
+
+def call_camera_methods(cam, method_names, value):
+    for method_name in method_names:
+        try:
+            method = getattr(cam, method_name)
+        except Exception:
+            continue
+
+        try:
+            method(value)
+            return True
+        except Exception as err:
+            print("camera %s failed: %s" % (method_name, err))
+
+    return False
+
+
+def apply_camera_tuning(cam):
+    if camera_setting_enabled(CAMERA_EXPOSURE):
+        call_camera_methods(cam, ["exposure"], CAMERA_EXPOSURE)
+    if camera_setting_enabled(CAMERA_GAIN):
+        call_camera_methods(cam, ["gain"], CAMERA_GAIN)
+    if camera_setting_enabled(CAMERA_CONTRAST):
+        call_camera_methods(cam, ["constrast", "contrast"], CAMERA_CONTRAST)
+
+    if CAMERA_WB_GAIN:
+        try:
+            cam.awb_mode(camera.AwbMode.Manual)
+        except Exception as err:
+            print("camera manual awb failed: %s" % err)
+        call_camera_methods(cam, ["set_wb_gain"], CAMERA_WB_GAIN)
+
+
+def skip_camera_startup_frames(cam):
+    if CAMERA_SKIP_FRAMES <= 0:
+        return
+
+    try:
+        cam.skip_frames(CAMERA_SKIP_FRAMES)
+        return
+    except Exception:
+        pass
+
+    for _ in range(CAMERA_SKIP_FRAMES):
+        try:
+            cam.read()
+        except Exception:
+            return
 
 
 def get_roi():
@@ -665,7 +738,9 @@ def process_frame(img, fps):
 
 
 def main():
-    cam = camera.Camera(CAMERA_WIDTH, CAMERA_HEIGHT)
+    cam = create_camera()
+    apply_camera_tuning(cam)
+    skip_camera_startup_frames(cam)
     disp = display.Display()
 
     while not app.need_exit():

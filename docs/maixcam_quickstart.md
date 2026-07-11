@@ -19,6 +19,16 @@ CAMERA_HEIGHT = 320
 
 Target detection uses MaixPy image algorithms that require fast frame buffer memory. `512x320` with a smaller ROI is the current balance between image clarity and speed. Use `camera_preview.py` for preview-only `640x480` testing.
 
+The main program also uses low-latency camera buffering and skips a few startup frames:
+
+```python
+CAMERA_BUFFER_NUM = 1
+CAMERA_SKIP_FRAMES = 5
+CAMERA_CONTRAST = 80
+```
+
+If the image becomes too dark or the black edges look too harsh, lower `CAMERA_CONTRAST` first.
+
 ## Next Vision Stages
 
 After preview works:
@@ -126,4 +136,10 @@ Useful MaixPy API notes are collected in:
 
 ```text
 docs/maixpy_api_notes.md
+```
+
+Official 2025 E-question reference notes are collected in:
+
+```text
+docs/official_maixpy_reference.md
 ```
