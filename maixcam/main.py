@@ -65,6 +65,7 @@ try:
         TARGET_MIN_RECT_W,
         TARGET_MODE,
         TARGET_PERSPECTIVE_FALLBACK_BLOB,
+        TARGET_PERSPECTIVE_DISTANCE_WEIGHT,
         TARGET_PERSPECTIVE_MAX_ASPECT_X100,
         TARGET_PERSPECTIVE_MIN_AREA,
         TARGET_PERSPECTIVE_MIN_H,
@@ -72,6 +73,7 @@ try:
         TARGET_RECT_THRESHOLD,
         TARGET_ROUGH_FAST_MOVE_DISTANCE,
         TARGET_ROUGH_FIRST_ENABLE,
+        TARGET_ROUGH_OUTPUT_ENABLE,
         TARGET_ROUGH_ROI_PADDING,
         TARGET_ROUGH_SKIP_PERSPECTIVE_ON_FAST_MOVE,
         TARGET_SMOOTHING_ALPHA_X100,
@@ -122,8 +124,9 @@ except ImportError:
     TARGET_PERSPECTIVE_FALLBACK_BLOB = True
     TARGET_PERSPECTIVE_MIN_W = 40
     TARGET_PERSPECTIVE_MIN_H = 30
-    TARGET_PERSPECTIVE_MIN_AREA = 1200
+    TARGET_PERSPECTIVE_MIN_AREA = 1800
     TARGET_PERSPECTIVE_MAX_ASPECT_X100 = 450
+    TARGET_PERSPECTIVE_DISTANCE_WEIGHT = 3
     TARGET_FAST_ROI_ENABLE = True
     TARGET_FAST_ROI_PADDING = 180
     TARGET_FULL_SCAN_INTERVAL = 2
@@ -132,7 +135,8 @@ except ImportError:
     TARGET_ROUGH_FIRST_ENABLE = True
     TARGET_ROUGH_ROI_PADDING = 140
     TARGET_ROUGH_FAST_MOVE_DISTANCE = 30
-    TARGET_ROUGH_SKIP_PERSPECTIVE_ON_FAST_MOVE = True
+    TARGET_ROUGH_SKIP_PERSPECTIVE_ON_FAST_MOVE = False
+    TARGET_ROUGH_OUTPUT_ENABLE = False
     TARGET_BLOB_CENTER_METHOD = "rect"
     TARGET_BLOB_THRESHOLDS = [[0, 45, -128, 127, -128, 127]]
     TARGET_BLOB_AREA_MIN = 80
@@ -140,7 +144,7 @@ except ImportError:
     TARGET_BLOB_MIN_W = 6
     TARGET_BLOB_MIN_H = 6
     TARGET_BLOB_MAX_ASPECT_X100 = 350
-    TARGET_SMOOTHING_ALPHA_X100 = 90
+    TARGET_SMOOTHING_ALPHA_X100 = 85
     TARGET_LOST_HOLD_FRAMES = 1
     TARGET_CIRCLE_THRESHOLD = 3000
     TARGET_RECT_THRESHOLD = 10000
@@ -466,7 +470,7 @@ def detect_blobs(img):
         print("find_blobs failed: %s" % err)
         return None
 
-    center_x, center_y = frame_center()
+    center_x, center_y = target_anchor_center()
     best = None
     best_score = -1
     for blob in blobs:
@@ -627,6 +631,14 @@ def same_roi(a, b):
     return a[0] == b[0] and a[1] == b[1] and a[2] == b[2] and a[3] == b[3]
 
 
+def target_anchor_center(anchor_target=None):
+    if anchor_target:
+        return anchor_target["x"], anchor_target["y"]
+    if SMOOTHED_TARGET:
+        return SMOOTHED_TARGET["x"], SMOOTHED_TARGET["y"]
+    return frame_center()
+
+
 def append_unique_roi(rois, roi):
     for existing in rois:
         if same_roi(existing, roi):
@@ -634,8 +646,8 @@ def append_unique_roi(rois, roi):
     rois.append(roi)
 
 
-def select_perspective_target(rects):
-    center_x, center_y = frame_center()
+def select_perspective_target(rects, anchor_target=None):
+    anchor_x, anchor_y = target_anchor_center(anchor_target)
     best = None
     best_score = -1
     for rect_obj in rects:
@@ -663,8 +675,8 @@ def select_perspective_target(rects):
         if area < TARGET_PERSPECTIVE_MIN_AREA:
             continue
 
-        distance_penalty = abs(x - center_x) + abs(y - center_y)
-        score = area + safe_magnitude(rect_obj) - distance_penalty
+        distance_penalty = abs(x - anchor_x) + abs(y - anchor_y)
+        score = area + safe_magnitude(rect_obj) - distance_penalty * TARGET_PERSPECTIVE_DISTANCE_WEIGHT
         if score > best_score:
             best_score = score
             best = {
@@ -701,7 +713,7 @@ def detect_perspective_rects(img, rough_target=None):
             print("find_perspective failed: %s" % err)
             return None
 
-        best = select_perspective_target(rects)
+        best = select_perspective_target(rects, rough_target)
         if best:
             return best
 
@@ -771,7 +783,7 @@ def detect_target(img):
     if mode == "perspective" or mode == "auto":
         if TARGET_ROUGH_FIRST_ENABLE:
             blob_target = detect_blobs(img)
-            if blob_target and should_use_rough_target_now(blob_target):
+            if TARGET_ROUGH_OUTPUT_ENABLE and blob_target and should_use_rough_target_now(blob_target):
                 blob_target["type"] = "blob-fast"
                 return blob_target
         perspective_target = detect_perspective_rects(img, blob_target)
@@ -795,10 +807,10 @@ def detect_target(img):
     if mode == "perspective" and TARGET_PERSPECTIVE_FALLBACK_BLOB:
         if not blob_target:
             blob_target = detect_blobs(img)
-        if blob_target:
+        if TARGET_ROUGH_OUTPUT_ENABLE and blob_target:
             blob_target["type"] = "blob-fast"
             return blob_target
-    if blob_target:
+    if mode != "perspective" and blob_target:
         return blob_target
     if circle_target:
         return circle_target
