@@ -18,6 +18,14 @@ TARGET_SMOOTHING_ALPHA_X100 = 35
 
 Increase it for faster response. Decrease it for less jitter.
 
+If the target jumps when switching between perspective detection and blob fallback, tune:
+
+```python
+TARGET_SMOOTH_MAX_JUMP = 80
+```
+
+A larger value smooths more mode changes, but too large a value can hide a real wrong detection.
+
 If the red outline is missing or jumps:
 
 ```python
@@ -30,7 +38,7 @@ Use `TARGET_MODE = "blob"` only as a fast fallback test.
 
 ## Green Laser Is Not Detected
 
-Start the program with the laser off. Wait until `laser: CAL x/25` finishes, then turn the laser on.
+Start the program with the laser off. Wait until `laser: CAL x/25 KEEP OFF` finishes, then turn the laser on. If the laser was on during calibration, restart the program so the real laser is not learned as a static reflection.
 
 If the real laser still shows `LOST`, relax these slightly:
 
@@ -42,6 +50,14 @@ LASER_MAX_H = 20
 ```
 
 Try `L_min = 60` before making the A/B range wider.
+
+If the laser is lost for one frame when the target briefly disappears, test this carefully:
+
+```python
+LASER_TARGET_LOST_FALLBACK_FRAMES = 1
+```
+
+Keep it at `0` for the safest competition default. Larger values increase the chance of selecting green reflections.
 
 ## Laser False Positives
 
@@ -68,6 +84,15 @@ DETECT_EVERY_N_FRAMES = 2
 ```
 
 If it is still too slow, try:
+
+```python
+PRINT_TIMING = True
+TIMING_PRINT_EVERY_N_FRAMES = 60
+```
+
+This prints coarse target/laser/total processing time every 60 frames. Turn it back off before the formal run.
+
+Then reduce debug drawing:
 
 ```python
 DETECT_EVERY_N_FRAMES = 3

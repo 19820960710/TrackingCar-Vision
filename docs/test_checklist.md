@@ -11,9 +11,11 @@ Use this checklist before changing code again.
 
 ## Startup
 
-- `laser: CAL x/25` appears.
+- `laser: CAL x/25 KEEP OFF` appears.
+- The `cfg:` line shows the expected config source/version.
 - The laser remains off during calibration.
 - Calibration finishes and changes to `laser: LOST`.
+- If the laser was on during calibration, restart before testing laser detection.
 - FPS is not obviously frozen.
 
 ## Target Test
@@ -53,5 +55,8 @@ Target angle:
 FPS:
 Target result:
 Laser result:
+Config source/version:
+DETECT_EVERY_N_FRAMES:
+UART mode/direction:
 Next change:
 ```

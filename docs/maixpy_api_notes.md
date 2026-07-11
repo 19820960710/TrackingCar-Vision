@@ -6,6 +6,12 @@ Official API reference:
 https://wiki.sipeed.com/maixpy/api/
 ```
 
+Official MaixPy GitHub repository:
+
+```text
+https://github.com/sipeed/maixpy
+```
+
 Project reference notes:
 
 ```text

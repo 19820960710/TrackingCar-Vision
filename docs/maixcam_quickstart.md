@@ -38,8 +38,9 @@ After preview works:
 2. Wait for `laser: CAL x/25` to finish.
 3. Confirm the red target outline is reasonable.
 4. Turn on the green laser and check the blue laser marker.
-5. Check `aim dx/dy`.
-6. Enable UART only after the screen result is stable.
+5. Check that the `cfg:` line shows the expected config source/version.
+6. Check `aim dx/dy`.
+7. Enable UART only after the screen result is stable.
 
 ## Code Roles
 
@@ -47,7 +48,7 @@ After preview works:
 - Use `maixcam/main.py` for the real vision pipeline.
 - Keep PC-only OpenCV helper scripts under `scripts/`.
 
-`maixcam/main.py` can run as a single file in MaixVision. If `config.py` is not uploaded with it, built-in fallback settings are used.
+`maixcam/main.py` can run as a single file in MaixVision. If `config.py` is not uploaded with it, built-in fallback settings are used. The debug overlay prints `cfg: external-config ...` when `config.py` is loaded and `cfg: fallback-main ...` when only `main.py` is running.
 
 ## Debug Overlay
 
@@ -156,7 +157,7 @@ LASER_SMOOTHING_ALPHA_X100 = 85
 LASER_LOST_HOLD_FRAMES = 0
 ```
 
-For green laser testing, start the program with the laser off. The first frames are used to learn static green reflections:
+For green laser testing, start the program with the laser off. The first frames are used to learn static green reflections, and the screen shows `laser: CAL ... KEEP OFF` during this period. If the laser was on during calibration, restart the program before trusting the result.
 
 ```python
 LASER_USE_BACKGROUND_CALIB = True

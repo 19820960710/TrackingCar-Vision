@@ -15,7 +15,7 @@ Open this file in MaixVision and run it on MaixCam Pro.
 - Camera preview works on MaixCam Pro.
 - Target detection uses perspective rectangle detection first, with blob fallback.
 - Green laser detection is enabled and uses target-area search plus startup background calibration.
-- The screen shows target center, laser center, aiming error, FPS, and state text.
+- The screen shows target center, laser center, aiming error, FPS, config source/version, and state text.
 - UART output is available but disabled by default.
 
 ## Project Layout
@@ -45,6 +45,17 @@ For a first camera-only check, run:
 ```text
 maixcam/camera_preview.py
 ```
+
+## Competition Run Checklist
+
+Before a formal run, confirm the on-screen `cfg:` line shows the expected source and version. If it shows `fallback-main`, MaixVision is running the single-file fallback settings from `maixcam/main.py`; if it shows `external-config`, it loaded `maixcam/config.py`.
+
+Recommended final checks:
+
+- Keep the laser off until `laser: CAL ... KEEP OFF` finishes.
+- Record the final values of `DETECT_EVERY_N_FRAMES`, target thresholds, laser thresholds, and UART mode in `docs/experiment_log.md`.
+- If FPS is low, turn off console printing first, then hide grid/ROI/status text before lowering resolution.
+- Confirm `AIM dx/dy` direction on the main controller before enabling motor correction.
 
 ## Main Documents
 

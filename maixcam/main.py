@@ -6,6 +6,8 @@ except ImportError:
 
 try:
     from config import (
+        CONFIG_SOURCE,
+        CONFIG_VERSION,
         CAMERA_HEIGHT,
         CAMERA_BUFFER_NUM,
         CAMERA_CONTRAST,
@@ -46,10 +48,13 @@ try:
         LASER_SNAP_DISTANCE,
         LASER_TARGET_BONUS_DISTANCE,
         LASER_TARGET_ROI_MARGIN,
+        LASER_TARGET_LOST_FALLBACK_FRAMES,
         LASER_TRACK_BONUS_DISTANCE,
         LASER_USE_BACKGROUND_CALIB,
         LASER_USE_TARGET_ROI,
         PRINT_FPS,
+        PRINT_TIMING,
+        TIMING_PRINT_EVERY_N_FRAMES,
         PRINT_LASER,
         PRINT_TARGET,
         ROI_SCALE_DEN,
@@ -85,6 +90,7 @@ try:
         TARGET_PERSPECTIVE_MIN_H,
         TARGET_PERSPECTIVE_MIN_W,
         TARGET_RECT_THRESHOLD,
+        TARGET_SMOOTH_MAX_JUMP,
         TARGET_SMOOTHING_ALPHA_X100,
         UART_BAUDRATE,
         UART_PORT,
@@ -97,6 +103,8 @@ try:
         UART_TX_PIN,
     )
 except ImportError:
+    CONFIG_VERSION = "2026-07-11-competition"
+    CONFIG_SOURCE = "fallback-main"
     CAMERA_WIDTH = 512
     CAMERA_HEIGHT = 320
     CAMERA_FPS = 60
@@ -108,6 +116,8 @@ except ImportError:
     CAMERA_WB_GAIN = []
     SHOW_FPS = True
     PRINT_FPS = False
+    PRINT_TIMING = False
+    TIMING_PRINT_EVERY_N_FRAMES = 60
     SHOW_CENTER_GUIDE = True
     SHOW_GRID = False
     SHOW_ROI = False
@@ -134,6 +144,7 @@ except ImportError:
     LASER_FALLBACK_FULL_FRAME = False
     LASER_USE_TARGET_ROI = True
     LASER_TARGET_ROI_MARGIN = 28
+    LASER_TARGET_LOST_FALLBACK_FRAMES = 0
     LASER_MIN_DENSITY_X100 = 22
     LASER_USE_BACKGROUND_CALIB = True
     LASER_BACKGROUND_CALIB_FRAMES = 25
@@ -166,6 +177,7 @@ except ImportError:
     TARGET_BLOB_MIN_W = 6
     TARGET_BLOB_MIN_H = 6
     TARGET_BLOB_MAX_ASPECT_X100 = 350
+    TARGET_SMOOTH_MAX_JUMP = 80
     TARGET_SMOOTHING_ALPHA_X100 = 35
     TARGET_LOST_HOLD_FRAMES = 5
     TARGET_CIRCLE_THRESHOLD = 3000
@@ -411,13 +423,25 @@ def target_laser_roi():
     )
 
 
+def should_use_laser_fallback_roi():
+    if not LASER_REQUIRE_TARGET:
+        return True
+    if LASER_TARGET_LOST_FALLBACK_FRAMES <= 0:
+        return False
+    if LAST_TARGET:
+        return True
+
+    lost_extra = TARGET_LOST_COUNT - TARGET_LOST_HOLD_FRAMES
+    return 0 <= lost_extra < LASER_TARGET_LOST_FALLBACK_FRAMES
+
+
 def laser_search_rois():
     rois = []
     target_roi = target_laser_roi()
     if target_roi:
         rois.append(target_roi)
 
-    if LASER_REQUIRE_TARGET and not target_roi:
+    if LASER_REQUIRE_TARGET and not target_roi and not should_use_laser_fallback_roi():
         return rois
     if not LASER_FALLBACK_FULL_FRAME and target_roi:
         return rois
@@ -1140,21 +1164,37 @@ def smooth_target_rect(target, smooth_x, smooth_y, raw_x, raw_y):
             point[1] += dy
 
 
+def target_can_smooth(raw_target):
+    if not SMOOTHED_TARGET or not raw_target:
+        return False
+    if SMOOTHED_TARGET["type"] == raw_target["type"]:
+        return True
+    if TARGET_SMOOTH_MAX_JUMP <= 0:
+        return False
+
+    jump = distance_xy(SMOOTHED_TARGET["x"], SMOOTHED_TARGET["y"], raw_target["x"], raw_target["y"])
+    return jump <= TARGET_SMOOTH_MAX_JUMP
+
+
+def smooth_target(raw_target):
+    target = clone_target(raw_target)
+    old_x = SMOOTHED_TARGET["x"]
+    old_y = SMOOTHED_TARGET["y"]
+    new_x = raw_target["x"]
+    new_y = raw_target["y"]
+    target["x"] = smooth_value(old_x, new_x)
+    target["y"] = smooth_value(old_y, new_y)
+    target["stable"] = True
+    smooth_target_rect(target, target["x"], target["y"], new_x, new_y)
+    return target
+
+
 def update_target_tracking(raw_target):
     global SMOOTHED_TARGET, TARGET_LOST_COUNT
 
     if raw_target:
-        if SMOOTHED_TARGET and SMOOTHED_TARGET["type"] == raw_target["type"]:
-            target = clone_target(raw_target)
-            old_x = SMOOTHED_TARGET["x"]
-            old_y = SMOOTHED_TARGET["y"]
-            new_x = raw_target["x"]
-            new_y = raw_target["y"]
-            target["x"] = smooth_value(old_x, new_x)
-            target["y"] = smooth_value(old_y, new_y)
-            target["stable"] = True
-            smooth_target_rect(target, target["x"], target["y"], new_x, new_y)
-            SMOOTHED_TARGET = target
+        if target_can_smooth(raw_target):
+            SMOOTHED_TARGET = smooth_target(raw_target)
         else:
             SMOOTHED_TARGET = clone_target(raw_target)
         TARGET_LOST_COUNT = 0
@@ -1238,6 +1278,7 @@ def draw_status_text(img, fps):
     img.draw_string(8, 88, "center: (%d,%d)" % (center_x, center_y), image.COLOR_GREEN)
     img.draw_string(8, 108, "roi: (%d,%d,%d,%d)" % (roi_x, roi_y, roi_w, roi_h), image.COLOR_GREEN)
     img.draw_string(8, 128, "x->right  y->down", image.COLOR_GREEN)
+    img.draw_string(8, 148, "cfg: %s %s" % (CONFIG_SOURCE, CONFIG_VERSION), image.COLOR_GREEN)
 
 
 def clip_rect_to_frame(x, y, w, h):
@@ -1342,7 +1383,7 @@ def draw_aim_status(img, target, laser):
         img.draw_string(
             8,
             y0 + 20,
-            "laser: CAL %d/%d" % (LASER_CALIB_FRAMES, LASER_BACKGROUND_CALIB_FRAMES),
+            "laser: CAL %d/%d KEEP OFF" % (LASER_CALIB_FRAMES, LASER_BACKGROUND_CALIB_FRAMES),
             image.COLOR_BLUE,
         )
     elif laser:
@@ -1371,10 +1412,45 @@ def draw_debug_overlay(img, fps, target, laser):
     draw_aim_status(img, target, laser)
 
 
+def time_ticks_ms():
+    try:
+        return time.ticks_ms()
+    except Exception:
+        return None
+
+
+def elapsed_ms(start_ms):
+    if start_ms is None:
+        return -1
+
+    now_ms = time_ticks_ms()
+    if now_ms is None:
+        return -1
+
+    try:
+        return time.ticks_diff(now_ms, start_ms)
+    except Exception:
+        return now_ms - start_ms
+
+
+def print_timing_if_due(target_ms, laser_ms, total_ms):
+    if not PRINT_TIMING:
+        return
+    if TIMING_PRINT_EVERY_N_FRAMES <= 0:
+        return
+    if FRAME_INDEX % TIMING_PRINT_EVERY_N_FRAMES != 0:
+        return
+
+    print("timing target=%dms laser=%dms total=%dms" % (target_ms, laser_ms, total_ms))
+
+
 def process_frame(img, fps):
     """Detect the target and draw the debug view."""
     global FRAME_INDEX, LAST_TARGET, LAST_LASER
 
+    total_start_ms = time_ticks_ms()
+    target_ms = -1
+    laser_ms = -1
     FRAME_INDEX += 1
     target_due = (
         DETECT_EVERY_N_FRAMES <= 1
@@ -1383,10 +1459,14 @@ def process_frame(img, fps):
     )
 
     if target_due:
+        target_start_ms = time_ticks_ms()
         raw_target = detect_target(img)
+        target_ms = elapsed_ms(target_start_ms)
         LAST_TARGET = update_target_tracking(raw_target)
 
+    laser_start_ms = time_ticks_ms()
     LAST_LASER = update_laser_tracking(detect_laser(img))
+    laser_ms = elapsed_ms(laser_start_ms)
 
     target = LAST_TARGET
     laser = LAST_LASER
@@ -1400,10 +1480,24 @@ def process_frame(img, fps):
         )
     if PRINT_LASER and laser:
         print("laser=%s x=%d y=%d" % (LASER_COLOR, laser["x"], laser["y"]))
+    print_timing_if_due(target_ms, laser_ms, elapsed_ms(total_start_ms))
     return img
 
 
+def print_startup_config():
+    print("TrackingCar Vision config: %s %s" % (CONFIG_SOURCE, CONFIG_VERSION))
+    print("camera: %dx%d @ %d fps, detect every %d frame(s)" % (
+        CAMERA_WIDTH,
+        CAMERA_HEIGHT,
+        CAMERA_FPS,
+        DETECT_EVERY_N_FRAMES,
+    ))
+    if laser_calibrating():
+        print("laser calibration: keep laser OFF for %d frames" % LASER_BACKGROUND_CALIB_FRAMES)
+
+
 def main():
+    print_startup_config()
     cam = create_camera()
     apply_camera_tuning(cam)
     skip_camera_startup_frames(cam)
