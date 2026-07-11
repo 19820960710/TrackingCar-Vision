@@ -63,30 +63,33 @@ The ROI is centered and covers 80% of the image by default. Change `ROI_SCALE_NU
 
 ## Target Detection
 
-`maixcam/main.py` uses MaixPy built-in `find_blobs` first. The current fast default is:
+`maixcam/main.py` uses MaixPy built-in rectangle/corner detection first, then falls back to blobs if the corners are not found. The current default is:
 
 ```python
 ENABLE_TARGET_DETECT = True
-TARGET_MODE = "blob"
+TARGET_MODE = "perspective"
 ```
 
 Use these modes while testing:
 
+- `perspective`: detect the target rectangle corners and use the diagonal intersection as the target center
 - `blob`: fast dark/black target candidate detection
 - `circle`: only detect circular targets
 - `rect`: only detect rectangular targets
 - `auto`: detect blobs, circles, and rectangles, then choose the stronger result
 
-Use `auto` only after `blob`, `circle`, or `rect` works stably. If you see fast frame buffer memory errors, lower resolution or avoid `auto`.
+Use `perspective` for tilted-camera target aiming. Use `auto` only after `blob`, `circle`, or `rect` works stably. If you see fast frame buffer memory errors, lower resolution or avoid `auto`.
 
-For blob targets, the default output is center-first. The red box is drawn around the detected center instead of using blob corner points, because blob corners can become unstable when the camera views the target at an angle.
+For tilted targets, the default output is perspective-first:
 
 ```python
+TARGET_MODE = "perspective"
+TARGET_PERSPECTIVE_FALLBACK_BLOB = True
 SHOW_TARGET_BOX = True
 TARGET_BLOB_CENTER_METHOD = "rect"
 ```
 
-The red box is a rectangular display box centered on the detected point. The target center uses the candidate rectangle center by default, not the dark-pixel center, because black rings, shadows, and uneven borders can pull the pixel center away from the real target center.
+When four corners are found, the red outline follows the tilted quadrilateral and the target center is the diagonal intersection. If corners are not found, the program falls back to blob detection so the preview still runs.
 
 ## Target Smoothing
 

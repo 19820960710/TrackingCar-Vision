@@ -12,8 +12,9 @@ The current `maixcam/main.py` stays as a lightweight real-time baseline:
 
 - Use `find_blobs` with LAB thresholds to detect dark target candidates.
 - Use ROI, area threshold, and pixel threshold to reduce false candidates.
-- Use the candidate rectangle center as the default target center.
-- Draw a rectangular red display box around the detected center instead of using unstable blob corner lines.
+- Use `find_rects` corners first and compute the target center from the quadrilateral diagonal intersection.
+- Fall back to blob detection only when the four-corner target is not found.
+- Draw the tilted quadrilateral outline when perspective corners are available.
 - Use `buff_num=1` to reduce camera capture latency.
 - Skip the first few camera frames after startup.
 - Keep camera contrast configurable, but disabled by default.
@@ -54,6 +55,8 @@ CAMERA_CONTRAST = -1
 If the target center jumps, keep the red box on for checking the detected center:
 
 ```python
+TARGET_MODE = "perspective"
+TARGET_PERSPECTIVE_FALLBACK_BLOB = True
 SHOW_TARGET_BOX = True
 TARGET_BLOB_CENTER_METHOD = "rect"
 ```

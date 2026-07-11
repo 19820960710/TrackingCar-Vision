@@ -59,6 +59,11 @@ try:
         TARGET_MIN_RECT_H,
         TARGET_MIN_RECT_W,
         TARGET_MODE,
+        TARGET_PERSPECTIVE_FALLBACK_BLOB,
+        TARGET_PERSPECTIVE_MAX_ASPECT_X100,
+        TARGET_PERSPECTIVE_MIN_AREA,
+        TARGET_PERSPECTIVE_MIN_H,
+        TARGET_PERSPECTIVE_MIN_W,
         TARGET_RECT_THRESHOLD,
         TARGET_SMOOTHING_ALPHA_X100,
     )
@@ -104,7 +109,12 @@ except ImportError:
     TARGET_MARKER_BOX_MAX_W = 220
     TARGET_MARKER_BOX_MAX_H = 170
     ENABLE_TARGET_DETECT = True
-    TARGET_MODE = "blob"
+    TARGET_MODE = "perspective"
+    TARGET_PERSPECTIVE_FALLBACK_BLOB = True
+    TARGET_PERSPECTIVE_MIN_W = 40
+    TARGET_PERSPECTIVE_MIN_H = 30
+    TARGET_PERSPECTIVE_MIN_AREA = 1200
+    TARGET_PERSPECTIVE_MAX_ASPECT_X100 = 450
     TARGET_BLOB_CENTER_METHOD = "rect"
     TARGET_BLOB_THRESHOLDS = [[0, 45, -128, 127, -128, 127]]
     TARGET_BLOB_AREA_MIN = 80
@@ -314,6 +324,80 @@ def rect_area(rect):
     return rect[2] * rect[3]
 
 
+def point_xy(point):
+    try:
+        return [int(point[0]), int(point[1])]
+    except Exception:
+        return [int(point.x()), int(point.y())]
+
+
+def order_corners(corners):
+    points = [point_xy(point) for point in corners]
+    if len(points) != 4:
+        return None
+
+    sums = [point[0] + point[1] for point in points]
+    diffs = [point[1] - point[0] for point in points]
+    top_left = points[sums.index(min(sums))]
+    bottom_right = points[sums.index(max(sums))]
+    top_right = points[diffs.index(min(diffs))]
+    bottom_left = points[diffs.index(max(diffs))]
+    ordered = [top_left, top_right, bottom_right, bottom_left]
+
+    seen = []
+    for point in ordered:
+        key = "%d,%d" % (point[0], point[1])
+        if key in seen:
+            return None
+        seen.append(key)
+    return ordered
+
+
+def quad_bounds(corners):
+    xs = [point[0] for point in corners]
+    ys = [point[1] for point in corners]
+    left = min(xs)
+    top = min(ys)
+    right = max(xs)
+    bottom = max(ys)
+    return [left, top, right - left, bottom - top]
+
+
+def quad_area(corners):
+    area2 = 0
+    for i in range(4):
+        x1, y1 = corners[i]
+        x2, y2 = corners[(i + 1) % 4]
+        area2 += x1 * y2 - x2 * y1
+    return abs(area2) // 2
+
+
+def diagonal_center(corners):
+    x1, y1 = corners[0]
+    x2, y2 = corners[2]
+    x3, y3 = corners[1]
+    x4, y4 = corners[3]
+
+    den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if den == 0:
+        x = (corners[0][0] + corners[1][0] + corners[2][0] + corners[3][0]) // 4
+        y = (corners[0][1] + corners[1][1] + corners[2][1] + corners[3][1]) // 4
+        return x, y
+
+    pre = x1 * y2 - y1 * x2
+    post = x3 * y4 - y3 * x4
+    x = (pre * (x3 - x4) - (x1 - x2) * post) // den
+    y = (pre * (y3 - y4) - (y1 - y2) * post) // den
+    return int(x), int(y)
+
+
+def safe_rect_corners(rect_obj):
+    try:
+        return order_corners(rect_obj.corners())
+    except Exception:
+        return None
+
+
 def detect_blobs(img):
     try:
         blobs = safe_find_blobs(img)
@@ -481,6 +565,61 @@ def detect_circles(img):
     return best
 
 
+def detect_perspective_rects(img):
+    try:
+        rects = safe_find_rects(img)
+    except MemoryError as err:
+        print("find_perspective memory low: %s" % err)
+        return None
+    except Exception as err:
+        print("find_perspective failed: %s" % err)
+        return None
+
+    center_x, center_y = frame_center()
+    best = None
+    best_score = -1
+    for rect_obj in rects:
+        corners = safe_rect_corners(rect_obj)
+        if not corners:
+            continue
+
+        x, y = diagonal_center(corners)
+        if not point_in_roi(x, y):
+            continue
+
+        rect = quad_bounds(corners)
+        w = rect[2]
+        h = rect[3]
+        if w < TARGET_PERSPECTIVE_MIN_W or h < TARGET_PERSPECTIVE_MIN_H:
+            continue
+
+        long_side = max(w, h)
+        short_side = max(1, min(w, h))
+        aspect_x100 = long_side * 100 // short_side
+        if aspect_x100 > TARGET_PERSPECTIVE_MAX_ASPECT_X100:
+            continue
+
+        area = quad_area(corners)
+        if area < TARGET_PERSPECTIVE_MIN_AREA:
+            continue
+
+        distance_penalty = abs(x - center_x) + abs(y - center_y)
+        score = area + safe_magnitude(rect_obj) - distance_penalty
+        if score > best_score:
+            best_score = score
+            best = {
+                "found": True,
+                "type": "perspective",
+                "x": x,
+                "y": y,
+                "rect": rect,
+                "corners": corners,
+                "score": score,
+            }
+
+    return best
+
+
 def detect_rects(img):
     try:
         rects = safe_find_rects(img)
@@ -525,10 +664,13 @@ def detect_target(img):
         return None
 
     mode = TARGET_MODE
+    perspective_target = None
     blob_target = None
     circle_target = None
     rect_target = None
 
+    if mode == "perspective" or mode == "auto":
+        perspective_target = detect_perspective_rects(img)
     if mode == "blob" or mode == "auto":
         blob_target = detect_blobs(img)
     if mode == "circle" or mode == "auto":
@@ -538,11 +680,18 @@ def detect_target(img):
 
     if mode == "auto":
         best = None
-        for target in (blob_target, circle_target, rect_target):
+        for target in (perspective_target, blob_target, circle_target, rect_target):
             if target and (best is None or target["score"] > best["score"]):
                 best = target
         return best
 
+    if perspective_target:
+        return perspective_target
+    if mode == "perspective" and TARGET_PERSPECTIVE_FALLBACK_BLOB:
+        blob_target = detect_blobs(img)
+        if blob_target:
+            blob_target["type"] = "blob-fallback"
+            return blob_target
     if blob_target:
         return blob_target
     if circle_target:
@@ -561,6 +710,8 @@ def clone_target(target):
         value = target[key]
         if key == "rect":
             cloned[key] = [value[0], value[1], value[2], value[3]]
+        elif key == "corners":
+            cloned[key] = [[point[0], point[1]] for point in value]
         else:
             cloned[key] = value
     cloned["raw_x"] = target["x"]
@@ -584,6 +735,11 @@ def smooth_target_rect(target, smooth_x, smooth_y, raw_x, raw_y):
         rect = target["rect"]
         rect[0] += dx
         rect[1] += dy
+
+    if "corners" in target:
+        for point in target["corners"]:
+            point[0] += dx
+            point[1] += dy
 
 
 def update_target_tracking(raw_target):
@@ -724,6 +880,26 @@ def draw_stable_target_box(img, target, x, y):
         img.draw_rect(rect[0], rect[1], rect[2], rect[3], image.COLOR_RED, 2)
 
 
+def draw_target_outline(img, target, x, y):
+    if not SHOW_TARGET_BOX:
+        return
+
+    if "corners" in target:
+        corners = target["corners"]
+        for i in range(4):
+            img.draw_line(
+                corners[i][0],
+                corners[i][1],
+                corners[(i + 1) % 4][0],
+                corners[(i + 1) % 4][1],
+                image.COLOR_RED,
+                2,
+            )
+        return
+
+    draw_stable_target_box(img, target, x, y)
+
+
 def draw_target_marker(img, target):
     if not target:
         return
@@ -732,7 +908,7 @@ def draw_target_marker(img, target):
     x = target["x"]
     y = target["y"]
 
-    draw_stable_target_box(img, target, x, y)
+    draw_target_outline(img, target, x, y)
 
     img.draw_line(x - 12, y, x + 12, y, image.COLOR_RED, 2)
     img.draw_line(x, y - 12, x, y + 12, image.COLOR_RED, 2)
