@@ -8,7 +8,21 @@ try:
         DETECT_EVERY_N_FRAMES,
         ENABLE_TARGET_DETECT,
         GRID_LINE_WIDTH,
+        ENABLE_LASER_DETECT,
+        LASER_AREA_MAX,
+        LASER_AREA_MIN,
+        LASER_COLOR,
+        LASER_GREEN_THRESHOLDS,
+        LASER_MAX_ASPECT_X100,
+        LASER_MAX_H,
+        LASER_MAX_W,
+        LASER_MIN_H,
+        LASER_MIN_W,
+        LASER_PIXELS_MIN,
+        LASER_RED_THRESHOLDS,
+        LASER_USE_ROI,
         PRINT_FPS,
+        PRINT_LASER,
         PRINT_TARGET,
         ROI_SCALE_DEN,
         ROI_SCALE_NUM,
@@ -44,6 +58,20 @@ except ImportError:
     SHOW_STATUS_TEXT = True
     CROSSHAIR_SIZE = 24
     GRID_LINE_WIDTH = 1
+    ENABLE_LASER_DETECT = True
+    LASER_COLOR = "red"
+    LASER_RED_THRESHOLDS = [[40, 100, 30, 127, -20, 127]]
+    LASER_GREEN_THRESHOLDS = [[40, 100, -128, -15, -20, 80]]
+    LASER_USE_ROI = True
+    LASER_AREA_MIN = 2
+    LASER_AREA_MAX = 250
+    LASER_PIXELS_MIN = 2
+    LASER_MIN_W = 1
+    LASER_MIN_H = 1
+    LASER_MAX_W = 30
+    LASER_MAX_H = 30
+    LASER_MAX_ASPECT_X100 = 300
+    PRINT_LASER = False
     ROI_SCALE_NUM = 3
     ROI_SCALE_DEN = 5
     ENABLE_TARGET_DETECT = True
@@ -71,6 +99,7 @@ FRAME_INDEX = 0
 LAST_TARGET = None
 SMOOTHED_TARGET = None
 TARGET_LOST_COUNT = 0
+LAST_LASER = None
 
 
 def frame_center():
@@ -130,6 +159,36 @@ def safe_find_blobs(img):
         )
 
 
+def laser_thresholds():
+    if LASER_COLOR == "green":
+        return LASER_GREEN_THRESHOLDS
+    return LASER_RED_THRESHOLDS
+
+
+def safe_find_laser_blobs(img):
+    roi = get_roi()
+    thresholds = laser_thresholds()
+    try:
+        if LASER_USE_ROI:
+            return img.find_blobs(
+                thresholds,
+                roi=roi,
+                area_threshold=LASER_AREA_MIN,
+                pixels_threshold=LASER_PIXELS_MIN,
+            )
+        return img.find_blobs(
+            thresholds,
+            area_threshold=LASER_AREA_MIN,
+            pixels_threshold=LASER_PIXELS_MIN,
+        )
+    except TypeError:
+        return img.find_blobs(
+            thresholds,
+            area_threshold=LASER_AREA_MIN,
+            pixels_threshold=LASER_PIXELS_MIN,
+        )
+
+
 def blob_rect(blob):
     try:
         return blob.rect()
@@ -146,6 +205,10 @@ def blob_rect(blob):
 
 def rect_center(rect):
     return rect[0] + rect[2] // 2, rect[1] + rect[3] // 2
+
+
+def rect_area(rect):
+    return rect[2] * rect[3]
 
 
 def detect_blobs(img):
@@ -177,7 +240,7 @@ def detect_blobs(img):
         if aspect_x100 > TARGET_BLOB_MAX_ASPECT_X100:
             continue
 
-        area = w * h
+        area = rect_area(rect)
         distance_penalty = abs(x - center_x) + abs(y - center_y)
         score = area - distance_penalty
         if score > best_score:
@@ -185,6 +248,57 @@ def detect_blobs(img):
             best = {
                 "found": True,
                 "type": "blob",
+                "x": x,
+                "y": y,
+                "rect": rect,
+                "score": score,
+            }
+
+    return best
+
+
+def detect_laser(img):
+    if not ENABLE_LASER_DETECT:
+        return None
+
+    try:
+        blobs = safe_find_laser_blobs(img)
+    except MemoryError as err:
+        print("find_laser memory low: %s" % err)
+        return None
+    except Exception as err:
+        print("find_laser failed: %s" % err)
+        return None
+
+    best = None
+    best_score = -1
+    for blob in blobs:
+        rect = blob_rect(blob)
+        x, y = rect_center(rect)
+        w = rect[2]
+        h = rect[3]
+        area = rect_area(rect)
+        if LASER_USE_ROI and not point_in_roi(x, y):
+            continue
+        if area < LASER_AREA_MIN or area > LASER_AREA_MAX:
+            continue
+        if w < LASER_MIN_W or h < LASER_MIN_H:
+            continue
+        if w > LASER_MAX_W or h > LASER_MAX_H:
+            continue
+
+        long_side = max(w, h)
+        short_side = max(1, min(w, h))
+        aspect_x100 = long_side * 100 // short_side
+        if aspect_x100 > LASER_MAX_ASPECT_X100:
+            continue
+
+        score = area * 10 - aspect_x100
+        if score > best_score:
+            best_score = score
+            best = {
+                "found": True,
+                "type": "laser",
                 "x": x,
                 "y": y,
                 "rect": rect,
@@ -434,7 +548,6 @@ def draw_status_text(img, fps):
 
 def draw_target_marker(img, target):
     if not target:
-        img.draw_string(8, CAMERA_HEIGHT - 24, "target: LOST", image.COLOR_RED)
         return
 
     center_x, center_y = frame_center()
@@ -464,38 +577,75 @@ def draw_target_marker(img, target):
     img.draw_line(x, y - 12, x, y + 12, image.COLOR_RED, 2)
     img.draw_circle(x, y, 3, image.COLOR_RED, 2)
     img.draw_line(center_x, center_y, x, y, image.COLOR_RED, 1)
-    img.draw_string(8, CAMERA_HEIGHT - 44, "target: %s (%d,%d)" % (target["type"], x, y), image.COLOR_RED)
-    img.draw_string(8, CAMERA_HEIGHT - 24, "offset: dx=%d dy=%d" % (dx, dy), image.COLOR_RED)
-
     if "raw_x" in target and (target["raw_x"] != x or target["raw_y"] != y):
         img.draw_circle(target["raw_x"], target["raw_y"], 4, image.COLOR_YELLOW, 1)
 
 
-def draw_debug_overlay(img, fps, target):
+def draw_laser_marker(img, laser):
+    if not laser:
+        return
+
+    x = laser["x"]
+    y = laser["y"]
+    rect = laser["rect"]
+    img.draw_rect(rect[0], rect[1], rect[2], rect[3], image.COLOR_BLUE, 1)
+    img.draw_line(x - 8, y, x + 8, y, image.COLOR_BLUE, 2)
+    img.draw_line(x, y - 8, x, y + 8, image.COLOR_BLUE, 2)
+    img.draw_circle(x, y, 4, image.COLOR_BLUE, 2)
+
+
+def draw_aim_status(img, target, laser):
+    y0 = CAMERA_HEIGHT - 64
+    if target:
+        img.draw_string(8, y0, "target: %s (%d,%d)" % (target["type"], target["x"], target["y"]), image.COLOR_RED)
+    else:
+        img.draw_string(8, y0, "target: LOST", image.COLOR_RED)
+
+    if laser:
+        img.draw_string(8, y0 + 20, "laser: %s (%d,%d)" % (LASER_COLOR, laser["x"], laser["y"]), image.COLOR_BLUE)
+    else:
+        img.draw_string(8, y0 + 20, "laser: LOST", image.COLOR_BLUE)
+
+    if target and laser:
+        dx = target["x"] - laser["x"]
+        dy = target["y"] - laser["y"]
+        img.draw_string(8, y0 + 40, "aim: dx=%d dy=%d" % (dx, dy), image.COLOR_YELLOW)
+        img.draw_line(laser["x"], laser["y"], target["x"], target["y"], image.COLOR_YELLOW, 1)
+    else:
+        img.draw_string(8, y0 + 40, "aim: WAIT", image.COLOR_YELLOW)
+
+
+def draw_debug_overlay(img, fps, target, laser):
     draw_grid(img)
     draw_roi(img)
     draw_target_marker(img, target)
+    draw_laser_marker(img, laser)
     draw_center_guide(img)
     draw_status_text(img, fps)
+    draw_aim_status(img, target, laser)
 
 
 def process_frame(img, fps):
     """Detect the target and draw the debug view."""
-    global FRAME_INDEX, LAST_TARGET
+    global FRAME_INDEX, LAST_TARGET, LAST_LASER
 
     FRAME_INDEX += 1
     if DETECT_EVERY_N_FRAMES <= 1 or FRAME_INDEX % DETECT_EVERY_N_FRAMES == 0:
         raw_target = detect_target(img)
         LAST_TARGET = update_target_tracking(raw_target)
+        LAST_LASER = detect_laser(img)
 
     target = LAST_TARGET
-    draw_debug_overlay(img, fps, target)
+    laser = LAST_LASER
+    draw_debug_overlay(img, fps, target, laser)
     if PRINT_TARGET and target:
         center_x, center_y = frame_center()
         print(
             "target=%s x=%d y=%d dx=%d dy=%d"
             % (target["type"], target["x"], target["y"], target["x"] - center_x, target["y"] - center_y)
         )
+    if PRINT_LASER and laser:
+        print("laser=%s x=%d y=%d" % (LASER_COLOR, laser["x"], laser["y"]))
     return img
 
 

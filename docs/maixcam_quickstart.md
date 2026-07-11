@@ -80,6 +80,38 @@ TARGET_LOST_HOLD_FRAMES = 5
 
 Increase `TARGET_SMOOTHING_ALPHA_X100` for faster response. Decrease it for less jitter. `TARGET_LOST_HOLD_FRAMES` keeps the last target briefly when detection drops for a few frames.
 
+## Laser Detection
+
+`maixcam/main.py` also detects the laser spot with `find_blobs`.
+
+Default settings:
+
+```python
+ENABLE_LASER_DETECT = True
+LASER_COLOR = "red"
+```
+
+The screen shows:
+
+- `target`: smoothed target center
+- `laser`: detected laser spot center
+- `aim`: aiming error
+
+The aiming error is:
+
+```text
+aim dx = target_x - laser_x
+aim dy = target_y - laser_y
+```
+
+If you use a green laser, change:
+
+```python
+LASER_COLOR = "green"
+```
+
+If the laser is not detected, tune `LASER_RED_THRESHOLDS` or `LASER_GREEN_THRESHOLDS`.
+
 ## API Reference
 
 Useful MaixPy API notes are collected in:

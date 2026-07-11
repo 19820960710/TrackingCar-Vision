@@ -52,6 +52,6 @@ uart.write_str("AIM,dx,dy,state\n")
 ## Development Order
 
 1. Make target detection stable with `find_blobs` first.
-2. Add laser spot detection with `find_blobs`.
+2. Add laser spot detection with `find_blobs` and compute `target - laser`.
 3. Use fixed exposure and gain if color detection drifts.
 4. Send `dx`, `dy`, and state to the main controller through UART.
