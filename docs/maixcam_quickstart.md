@@ -34,3 +34,15 @@ After preview works:
 - Keep `maixcam/camera_preview.py` as the simplest camera test.
 - Use `maixcam/main.py` for the real vision pipeline.
 - Keep PC-only OpenCV helper scripts under `scripts/`.
+
+## Debug Overlay
+
+`maixcam/main.py` shows:
+
+- center crosshair
+- 3x3 guide grid
+- center ROI rectangle
+- FPS state
+- image size and coordinate direction
+
+The ROI is centered and covers 80% of the image by default. Change `ROI_SCALE_NUM` and `ROI_SCALE_DEN` in `maixcam/config.py` if needed.
