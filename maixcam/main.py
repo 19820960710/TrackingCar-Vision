@@ -26,8 +26,8 @@ try:
         TARGET_RECT_THRESHOLD,
     )
 except ImportError:
-    CAMERA_WIDTH = 320
-    CAMERA_HEIGHT = 240
+    CAMERA_WIDTH = 512
+    CAMERA_HEIGHT = 320
     SHOW_FPS = True
     PRINT_FPS = True
     SHOW_CENTER_GUIDE = True
@@ -36,7 +36,7 @@ except ImportError:
     SHOW_STATUS_TEXT = True
     CROSSHAIR_SIZE = 24
     GRID_LINE_WIDTH = 1
-    ROI_SCALE_NUM = 4
+    ROI_SCALE_NUM = 3
     ROI_SCALE_DEN = 5
     ENABLE_TARGET_DETECT = True
     TARGET_MODE = "circle"
@@ -46,7 +46,7 @@ except ImportError:
     TARGET_MAX_RADIUS = 110
     TARGET_MIN_RECT_W = 20
     TARGET_MIN_RECT_H = 20
-    DETECT_EVERY_N_FRAMES = 3
+    DETECT_EVERY_N_FRAMES = 2
     PRINT_TARGET = False
 
 

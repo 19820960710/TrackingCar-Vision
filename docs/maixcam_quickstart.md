@@ -13,11 +13,11 @@
 Use this first for target detection:
 
 ```python
-CAMERA_WIDTH = 320
-CAMERA_HEIGHT = 240
+CAMERA_WIDTH = 512
+CAMERA_HEIGHT = 320
 ```
 
-Target detection uses MaixPy image algorithms that require fast frame buffer memory. Keep `main.py` at `320x240` first. Use `camera_preview.py` for clearer preview-only testing.
+Target detection uses MaixPy image algorithms that require fast frame buffer memory. `512x320` with a smaller ROI is the current balance between image clarity and speed. Use `camera_preview.py` for preview-only `640x480` testing.
 
 ## Next Vision Stages
 
