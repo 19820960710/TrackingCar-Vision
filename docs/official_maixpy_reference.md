@@ -13,8 +13,8 @@ The current `maixcam/main.py` stays as a lightweight real-time baseline:
 - Use `find_blobs` with LAB thresholds to detect dark target candidates.
 - Use ROI, area threshold, and pixel threshold to reduce false candidates.
 - Use `find_rects` corners first and compute the target center from the quadrilateral diagonal intersection.
-- Use rough blob tracking to guide the perspective search area, but do not output the rough blob center by default.
-- Briefly hold the previous target when four-corner detection drops, instead of drifting to a rough blob center.
+- Fall back to blob detection only when the four-corner target is not found.
+- Use rough blob tracking first during fast movement, then refine with perspective corners when available.
 - Draw the tilted quadrilateral outline when perspective corners are available.
 - Use `buff_num=1` to reduce camera capture latency.
 - Search near the last perspective target most frames, with periodic full scans for recovery.
@@ -66,8 +66,7 @@ TARGET_FULL_SCAN_INTERVAL = 2
 TARGET_JUMP_REJECT_ENABLE = False
 TARGET_ROUGH_FIRST_ENABLE = True
 TARGET_ROUGH_FAST_MOVE_DISTANCE = 30
-TARGET_ROUGH_SKIP_PERSPECTIVE_ON_FAST_MOVE = False
-TARGET_ROUGH_OUTPUT_ENABLE = False
+TARGET_ROUGH_SKIP_PERSPECTIVE_ON_FAST_MOVE = True
 SHOW_TARGET_BOX = True
 TARGET_BLOB_CENTER_METHOD = "rect"
 ```

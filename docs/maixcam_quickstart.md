@@ -68,7 +68,7 @@ The ROI is centered and covers 80% of the image by default. Change `ROI_SCALE_NU
 
 ## Target Detection
 
-`maixcam/main.py` uses MaixPy built-in rectangle/corner detection first. Blob detection is used only to guide the search area by default. The current default is:
+`maixcam/main.py` uses MaixPy built-in rectangle/corner detection first, then falls back to blobs if the corners are not found. The current default is:
 
 ```python
 ENABLE_TARGET_DETECT = True
@@ -94,7 +94,7 @@ SHOW_TARGET_BOX = True
 TARGET_BLOB_CENTER_METHOD = "rect"
 ```
 
-When four corners are found, the red outline follows the tilted quadrilateral and the target center is the diagonal intersection. If corners are not found, the program briefly holds the previous target instead of drifting to a rough blob center.
+When four corners are found, the red outline follows the tilted quadrilateral and the target center is the diagonal intersection. If corners are not found, the program falls back to blob detection so the preview still runs.
 
 For speed and stability, the perspective mode uses a small search window after the target has been found:
 
@@ -107,20 +107,19 @@ TARGET_MAX_CENTER_JUMP = 180
 TARGET_ROUGH_FIRST_ENABLE = True
 TARGET_ROUGH_ROI_PADDING = 140
 TARGET_ROUGH_FAST_MOVE_DISTANCE = 30
-TARGET_ROUGH_SKIP_PERSPECTIVE_ON_FAST_MOVE = False
-TARGET_ROUGH_OUTPUT_ENABLE = False
+TARGET_ROUGH_SKIP_PERSPECTIVE_ON_FAST_MOVE = True
 ```
 
 If the target moves very fast and is lost, keep `TARGET_FULL_SCAN_INTERVAL` small or increase `TARGET_FAST_ROI_PADDING`. If the center becomes jumpy again, turn `TARGET_JUMP_REJECT_ENABLE` back on.
 
-The rough blob target is used to guide the perspective search area, but it is not used as the final displayed target by default. This reduces drift. Only enable `TARGET_ROUGH_OUTPUT_ENABLE` if you want maximum response speed and can accept rougher center accuracy.
+During fast movement, the screen may show `target: blob-fast`. This means the program is using the faster rough target to keep the red box responsive. When the target slows down or the four corners are found again, it should return to `target: perspective`.
 
 ## Target Smoothing
 
 The displayed target center is smoothed before use. Current tracking-priority defaults:
 
 ```python
-TARGET_SMOOTHING_ALPHA_X100 = 85
+TARGET_SMOOTHING_ALPHA_X100 = 90
 TARGET_LOST_HOLD_FRAMES = 1
 ```
 
