@@ -10,14 +10,14 @@
 
 ## Recommended First Settings
 
-Use this first:
+Use this first for a clearer preview:
 
 ```python
-CAMERA_WIDTH = 320
-CAMERA_HEIGHT = 240
+CAMERA_WIDTH = 512
+CAMERA_HEIGHT = 320
 ```
 
-This resolution is easier for real-time target detection and aiming. Increase it only after the basic recognition pipeline is stable.
+This matches Sipeed's common MaixCam camera preview example and gives better detail than `320x240`. If recognition becomes slow later, reduce it back to `320x240`.
 
 ## Next Vision Stages
 
