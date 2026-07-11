@@ -51,7 +51,7 @@ uart.write_str("AIM,dx,dy,state\n")
 
 ## Development Order
 
-1. Make target detection stable with `find_circles` or `find_rects`.
+1. Make target detection stable with `find_circles` or `find_rects` at `320x240`.
 2. Add laser spot detection with `find_blobs`.
 3. Use fixed exposure and gain if color detection drifts.
 4. Send `dx`, `dy`, and state to the main controller through UART.

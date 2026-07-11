@@ -10,14 +10,14 @@
 
 ## Recommended First Settings
 
-Use this first for a clear preview:
+Use this first for target detection:
 
 ```python
-CAMERA_WIDTH = 640
-CAMERA_HEIGHT = 480
+CAMERA_WIDTH = 320
+CAMERA_HEIGHT = 240
 ```
 
-This gives a clearer image for early debugging. If recognition becomes slow later, reduce it to `512x320` or `320x240`.
+Target detection uses MaixPy image algorithms that require fast frame buffer memory. Keep `main.py` at `320x240` first. Use `camera_preview.py` for clearer preview-only testing.
 
 ## Next Vision Stages
 
@@ -53,20 +53,20 @@ The ROI is centered and covers 80% of the image by default. Change `ROI_SCALE_NU
 
 ## Target Detection
 
-`maixcam/main.py` uses MaixPy built-in `find_circles` and `find_rects` first. The current default is:
+`maixcam/main.py` uses MaixPy built-in `find_circles` and `find_rects` first. The current safe default is:
 
 ```python
 ENABLE_TARGET_DETECT = True
-TARGET_MODE = "auto"
+TARGET_MODE = "circle"
 ```
 
 Use these modes while testing:
 
-- `auto`: detect circles and rectangles, then choose the stronger result
 - `circle`: only detect circular targets
 - `rect`: only detect rectangular targets
+- `auto`: detect circles and rectangles, then choose the stronger result
 
-If FPS drops too much, change `TARGET_MODE` from `auto` to the exact target shape.
+Use `auto` only after `circle` or `rect` works stably. If you see fast frame buffer memory errors, lower resolution or avoid `auto`.
 
 ## API Reference
 

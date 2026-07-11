@@ -5,6 +5,7 @@ try:
         CAMERA_HEIGHT,
         CAMERA_WIDTH,
         CROSSHAIR_SIZE,
+        DETECT_EVERY_N_FRAMES,
         ENABLE_TARGET_DETECT,
         GRID_LINE_WIDTH,
         PRINT_FPS,
@@ -25,8 +26,8 @@ try:
         TARGET_RECT_THRESHOLD,
     )
 except ImportError:
-    CAMERA_WIDTH = 640
-    CAMERA_HEIGHT = 480
+    CAMERA_WIDTH = 320
+    CAMERA_HEIGHT = 240
     SHOW_FPS = True
     PRINT_FPS = True
     SHOW_CENTER_GUIDE = True
@@ -38,17 +39,20 @@ except ImportError:
     ROI_SCALE_NUM = 4
     ROI_SCALE_DEN = 5
     ENABLE_TARGET_DETECT = True
-    TARGET_MODE = "auto"
+    TARGET_MODE = "circle"
     TARGET_CIRCLE_THRESHOLD = 3000
     TARGET_RECT_THRESHOLD = 10000
     TARGET_MIN_RADIUS = 8
-    TARGET_MAX_RADIUS = 220
+    TARGET_MAX_RADIUS = 110
     TARGET_MIN_RECT_W = 20
     TARGET_MIN_RECT_H = 20
+    DETECT_EVERY_N_FRAMES = 3
     PRINT_TARGET = False
 
 
 STAGE_NAME = "TARGET_DETECT"
+FRAME_INDEX = 0
+LAST_TARGET = None
 
 
 def frame_center():
@@ -75,9 +79,28 @@ def safe_magnitude(obj):
         return 0
 
 
+def safe_find_circles(img):
+    roi = get_roi()
+    try:
+        return img.find_circles(roi=roi, threshold=TARGET_CIRCLE_THRESHOLD)
+    except TypeError:
+        return img.find_circles(threshold=TARGET_CIRCLE_THRESHOLD)
+
+
+def safe_find_rects(img):
+    roi = get_roi()
+    try:
+        return img.find_rects(roi=roi, threshold=TARGET_RECT_THRESHOLD)
+    except TypeError:
+        return img.find_rects(threshold=TARGET_RECT_THRESHOLD)
+
+
 def detect_circles(img):
     try:
-        circles = img.find_circles(threshold=TARGET_CIRCLE_THRESHOLD)
+        circles = safe_find_circles(img)
+    except MemoryError as err:
+        print("find_circles memory low: %s" % err)
+        return None
     except Exception as err:
         print("find_circles failed: %s" % err)
         return None
@@ -110,7 +133,10 @@ def detect_circles(img):
 
 def detect_rects(img):
     try:
-        rects = img.find_rects(threshold=TARGET_RECT_THRESHOLD)
+        rects = safe_find_rects(img)
+    except MemoryError as err:
+        print("find_rects memory low: %s" % err)
+        return None
     except Exception as err:
         print("find_rects failed: %s" % err)
         return None
@@ -278,7 +304,13 @@ def draw_debug_overlay(img, fps, target):
 
 def process_frame(img, fps):
     """Detect the target and draw the debug view."""
-    target = detect_target(img)
+    global FRAME_INDEX, LAST_TARGET
+
+    FRAME_INDEX += 1
+    if DETECT_EVERY_N_FRAMES <= 1 or FRAME_INDEX % DETECT_EVERY_N_FRAMES == 0:
+        LAST_TARGET = detect_target(img)
+
+    target = LAST_TARGET
     draw_debug_overlay(img, fps, target)
     if PRINT_TARGET and target:
         center_x, center_y = frame_center()
