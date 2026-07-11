@@ -216,3 +216,41 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project local data and generated outputs
+data/*
+!data/README.md
+models/*
+!models/README.md
+outputs/
+runs/
+logs/
+
+# Vision media files
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wmv
+*.flv
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tif
+*.tiff
+!docs/**/*.png
+!docs/**/*.jpg
+!docs/**/*.jpeg
+
+# Model weights and exported engines
+*.pt
+*.pth
+*.onnx
+*.engine
+*.tflite
+*.bin
+
+# Local editor and OS files
+.DS_Store
+Thumbs.db

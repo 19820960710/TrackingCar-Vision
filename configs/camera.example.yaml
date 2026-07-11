@@ -1,0 +1,13 @@
+# Copy this file to camera.local.yaml for local tuning.
+# Keep camera.local.yaml uncommitted if it contains machine-specific settings.
+
+camera:
+  id: 0
+  width: 640
+  height: 480
+  fps: 30
+
+algorithm:
+  mode: debug
+  target_color: red
+  min_area: 100
