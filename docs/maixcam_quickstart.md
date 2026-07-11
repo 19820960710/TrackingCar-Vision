@@ -99,21 +99,21 @@ For speed and stability, the perspective mode uses a small search window after t
 
 ```python
 TARGET_FAST_ROI_ENABLE = True
-TARGET_FAST_ROI_PADDING = 72
-TARGET_FULL_SCAN_INTERVAL = 10
-TARGET_JUMP_REJECT_ENABLE = True
-TARGET_MAX_CENTER_JUMP = 80
+TARGET_FAST_ROI_PADDING = 140
+TARGET_FULL_SCAN_INTERVAL = 3
+TARGET_JUMP_REJECT_ENABLE = False
+TARGET_MAX_CENTER_JUMP = 180
 ```
 
-If the target moves very fast and is lost, lower `TARGET_FULL_SCAN_INTERVAL`. If the center is still jumpy, lower `TARGET_MAX_CENTER_JUMP`.
+If the target moves very fast and is lost, keep `TARGET_FULL_SCAN_INTERVAL` small or increase `TARGET_FAST_ROI_PADDING`. If the center becomes jumpy again, turn `TARGET_JUMP_REJECT_ENABLE` back on.
 
 ## Target Smoothing
 
-The displayed target center is smoothed before use:
+The displayed target center is smoothed before use. Current tracking-priority defaults:
 
 ```python
-TARGET_SMOOTHING_ALPHA_X100 = 35
-TARGET_LOST_HOLD_FRAMES = 5
+TARGET_SMOOTHING_ALPHA_X100 = 80
+TARGET_LOST_HOLD_FRAMES = 2
 ```
 
 Increase `TARGET_SMOOTHING_ALPHA_X100` for faster response. Decrease it for less jitter. `TARGET_LOST_HOLD_FRAMES` keeps the last target briefly when detection drops for a few frames.

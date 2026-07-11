@@ -121,10 +121,10 @@ except ImportError:
     TARGET_PERSPECTIVE_MIN_AREA = 1200
     TARGET_PERSPECTIVE_MAX_ASPECT_X100 = 450
     TARGET_FAST_ROI_ENABLE = True
-    TARGET_FAST_ROI_PADDING = 72
-    TARGET_FULL_SCAN_INTERVAL = 10
-    TARGET_JUMP_REJECT_ENABLE = True
-    TARGET_MAX_CENTER_JUMP = 80
+    TARGET_FAST_ROI_PADDING = 140
+    TARGET_FULL_SCAN_INTERVAL = 3
+    TARGET_JUMP_REJECT_ENABLE = False
+    TARGET_MAX_CENTER_JUMP = 180
     TARGET_BLOB_CENTER_METHOD = "rect"
     TARGET_BLOB_THRESHOLDS = [[0, 45, -128, 127, -128, 127]]
     TARGET_BLOB_AREA_MIN = 80
@@ -132,8 +132,8 @@ except ImportError:
     TARGET_BLOB_MIN_W = 6
     TARGET_BLOB_MIN_H = 6
     TARGET_BLOB_MAX_ASPECT_X100 = 350
-    TARGET_SMOOTHING_ALPHA_X100 = 45
-    TARGET_LOST_HOLD_FRAMES = 5
+    TARGET_SMOOTHING_ALPHA_X100 = 80
+    TARGET_LOST_HOLD_FRAMES = 2
     TARGET_CIRCLE_THRESHOLD = 3000
     TARGET_RECT_THRESHOLD = 10000
     TARGET_MIN_RADIUS = 8
@@ -286,12 +286,15 @@ def safe_find_circles(img):
         return img.find_circles(threshold=TARGET_CIRCLE_THRESHOLD)
 
 
-def safe_find_rects(img):
-    roi = get_search_roi()
+def safe_find_rects_in_roi(img, roi):
     try:
         return img.find_rects(roi=roi, threshold=TARGET_RECT_THRESHOLD)
     except TypeError:
         return img.find_rects(threshold=TARGET_RECT_THRESHOLD)
+
+
+def safe_find_rects(img):
+    return safe_find_rects_in_roi(img, get_search_roi())
 
 
 def safe_find_blobs(img):
@@ -614,16 +617,11 @@ def detect_circles(img):
     return best
 
 
-def detect_perspective_rects(img):
-    try:
-        rects = safe_find_rects(img)
-    except MemoryError as err:
-        print("find_perspective memory low: %s" % err)
-        return None
-    except Exception as err:
-        print("find_perspective failed: %s" % err)
-        return None
+def same_roi(a, b):
+    return a[0] == b[0] and a[1] == b[1] and a[2] == b[2] and a[3] == b[3]
 
+
+def select_perspective_target(rects):
     center_x, center_y = frame_center()
     best = None
     best_score = -1
@@ -667,6 +665,35 @@ def detect_perspective_rects(img):
             }
 
     return best
+
+
+def detect_perspective_rects(img):
+    search_roi = get_search_roi()
+    full_roi = get_roi()
+
+    try:
+        rects = safe_find_rects_in_roi(img, search_roi)
+    except MemoryError as err:
+        print("find_perspective memory low: %s" % err)
+        return None
+    except Exception as err:
+        print("find_perspective failed: %s" % err)
+        return None
+
+    best = select_perspective_target(rects)
+    if best or same_roi(search_roi, full_roi):
+        return best
+
+    try:
+        rects = safe_find_rects_in_roi(img, full_roi)
+    except MemoryError as err:
+        print("find_perspective full memory low: %s" % err)
+        return None
+    except Exception as err:
+        print("find_perspective full failed: %s" % err)
+        return None
+
+    return select_perspective_target(rects)
 
 
 def detect_rects(img):
@@ -780,8 +807,6 @@ def should_ignore_raw_target(raw_target):
 
     old_type = SMOOTHED_TARGET.get("type")
     new_type = raw_target.get("type")
-    if old_type == "perspective" and new_type == "blob-fallback":
-        return TARGET_LOST_COUNT < TARGET_LOST_HOLD_FRAMES
 
     if not TARGET_JUMP_REJECT_ENABLE:
         return False
