@@ -1,0 +1,7 @@
+CAMERA_WIDTH = 320
+CAMERA_HEIGHT = 240
+
+SHOW_FPS = True
+PRINT_FPS = True
+
+WINDOW_TITLE = "TrackingCar Vision"
