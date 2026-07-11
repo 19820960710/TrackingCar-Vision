@@ -28,11 +28,10 @@ CAMERA_CONTRAST = -1
 PRINT_FPS = False
 SHOW_GRID = False
 SHOW_ROI = False
-SHOW_STATUS_TEXT = False
 ```
 
 `CAMERA_CONTRAST = -1` means the program will not force camera contrast by default. Only tune it after the target center is already basically correct.
-`PRINT_FPS = False` keeps the IDE output window quiet. `SHOW_STATUS_TEXT = False` hides the top text block to reduce drawing overhead.
+`PRINT_FPS = False` keeps the IDE output window quiet; the screen still shows FPS.
 
 ## Next Vision Stages
 
@@ -100,27 +99,21 @@ For speed and stability, the perspective mode uses a small search window after t
 
 ```python
 TARGET_FAST_ROI_ENABLE = True
-TARGET_FAST_ROI_PADDING = 180
-TARGET_FULL_SCAN_INTERVAL = 2
+TARGET_FAST_ROI_PADDING = 140
+TARGET_FULL_SCAN_INTERVAL = 3
 TARGET_JUMP_REJECT_ENABLE = False
 TARGET_MAX_CENTER_JUMP = 180
-TARGET_ROUGH_FIRST_ENABLE = True
-TARGET_ROUGH_ROI_PADDING = 140
-TARGET_ROUGH_FAST_MOVE_DISTANCE = 30
-TARGET_ROUGH_SKIP_PERSPECTIVE_ON_FAST_MOVE = True
 ```
 
 If the target moves very fast and is lost, keep `TARGET_FULL_SCAN_INTERVAL` small or increase `TARGET_FAST_ROI_PADDING`. If the center becomes jumpy again, turn `TARGET_JUMP_REJECT_ENABLE` back on.
-
-During fast movement, the screen may show `target: blob-fast`. This means the program is using the faster rough target to keep the red box responsive. When the target slows down or the four corners are found again, it should return to `target: perspective`.
 
 ## Target Smoothing
 
 The displayed target center is smoothed before use. Current tracking-priority defaults:
 
 ```python
-TARGET_SMOOTHING_ALPHA_X100 = 90
-TARGET_LOST_HOLD_FRAMES = 1
+TARGET_SMOOTHING_ALPHA_X100 = 80
+TARGET_LOST_HOLD_FRAMES = 2
 ```
 
 Increase `TARGET_SMOOTHING_ALPHA_X100` for faster response. Decrease it for less jitter. `TARGET_LOST_HOLD_FRAMES` keeps the last target briefly when detection drops for a few frames.
