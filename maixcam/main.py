@@ -53,12 +53,7 @@ try:
         TARGET_BLOB_MIN_W,
         TARGET_BLOB_PIXELS_MIN,
         TARGET_BLOB_THRESHOLDS,
-        TARGET_FAST_ROI_ENABLE,
-        TARGET_FAST_ROI_PADDING,
-        TARGET_FULL_SCAN_INTERVAL,
-        TARGET_JUMP_REJECT_ENABLE,
         TARGET_LOST_HOLD_FRAMES,
-        TARGET_MAX_CENTER_JUMP,
         TARGET_MAX_RADIUS,
         TARGET_MIN_RADIUS,
         TARGET_MIN_RECT_H,
@@ -82,10 +77,10 @@ except ImportError:
     CAMERA_GAIN = -1
     CAMERA_WB_GAIN = []
     SHOW_FPS = True
-    PRINT_FPS = False
+    PRINT_FPS = True
     SHOW_CENTER_GUIDE = True
-    SHOW_GRID = False
-    SHOW_ROI = False
+    SHOW_GRID = True
+    SHOW_ROI = True
     SHOW_STATUS_TEXT = True
     SHOW_TARGET_BOX = True
     CROSSHAIR_SIZE = 24
@@ -120,11 +115,6 @@ except ImportError:
     TARGET_PERSPECTIVE_MIN_H = 30
     TARGET_PERSPECTIVE_MIN_AREA = 1200
     TARGET_PERSPECTIVE_MAX_ASPECT_X100 = 450
-    TARGET_FAST_ROI_ENABLE = True
-    TARGET_FAST_ROI_PADDING = 72
-    TARGET_FULL_SCAN_INTERVAL = 10
-    TARGET_JUMP_REJECT_ENABLE = True
-    TARGET_MAX_CENTER_JUMP = 80
     TARGET_BLOB_CENTER_METHOD = "rect"
     TARGET_BLOB_THRESHOLDS = [[0, 45, -128, 127, -128, 127]]
     TARGET_BLOB_AREA_MIN = 80
@@ -132,7 +122,7 @@ except ImportError:
     TARGET_BLOB_MIN_W = 6
     TARGET_BLOB_MIN_H = 6
     TARGET_BLOB_MAX_ASPECT_X100 = 350
-    TARGET_SMOOTHING_ALPHA_X100 = 45
+    TARGET_SMOOTHING_ALPHA_X100 = 35
     TARGET_LOST_HOLD_FRAMES = 5
     TARGET_CIRCLE_THRESHOLD = 3000
     TARGET_RECT_THRESHOLD = 10000
@@ -227,45 +217,6 @@ def get_roi():
     return roi_x, roi_y, roi_w, roi_h
 
 
-def clamp_roi(x, y, w, h):
-    left = max(0, x)
-    top = max(0, y)
-    right = min(CAMERA_WIDTH, x + w)
-    bottom = min(CAMERA_HEIGHT, y + h)
-    clipped_w = right - left
-    clipped_h = bottom - top
-    if clipped_w <= 0 or clipped_h <= 0:
-        return get_roi()
-    return [left, top, clipped_w, clipped_h]
-
-
-def expanded_rect_roi(rect, padding):
-    return clamp_roi(
-        rect[0] - padding,
-        rect[1] - padding,
-        rect[2] + padding * 2,
-        rect[3] + padding * 2,
-    )
-
-
-def should_full_scan():
-    return TARGET_FULL_SCAN_INTERVAL > 0 and FRAME_INDEX % TARGET_FULL_SCAN_INTERVAL == 0
-
-
-def get_search_roi():
-    if not TARGET_FAST_ROI_ENABLE or should_full_scan():
-        return get_roi()
-
-    if not SMOOTHED_TARGET:
-        return get_roi()
-    if SMOOTHED_TARGET.get("type") != "perspective":
-        return get_roi()
-    if "rect" not in SMOOTHED_TARGET:
-        return get_roi()
-
-    return expanded_rect_roi(SMOOTHED_TARGET["rect"], TARGET_FAST_ROI_PADDING)
-
-
 def point_in_roi(x, y):
     roi_x, roi_y, roi_w, roi_h = get_roi()
     return roi_x <= x <= roi_x + roi_w and roi_y <= y <= roi_y + roi_h
@@ -287,7 +238,7 @@ def safe_find_circles(img):
 
 
 def safe_find_rects(img):
-    roi = get_search_roi()
+    roi = get_roi()
     try:
         return img.find_rects(roi=roi, threshold=TARGET_RECT_THRESHOLD)
     except TypeError:
@@ -774,25 +725,6 @@ def smooth_value(old_value, new_value):
     return (old_value * (100 - alpha) + new_value * alpha) // 100
 
 
-def should_ignore_raw_target(raw_target):
-    if not raw_target or not SMOOTHED_TARGET:
-        return False
-
-    old_type = SMOOTHED_TARGET.get("type")
-    new_type = raw_target.get("type")
-    if old_type == "perspective" and new_type == "blob-fallback":
-        return TARGET_LOST_COUNT < TARGET_LOST_HOLD_FRAMES
-
-    if not TARGET_JUMP_REJECT_ENABLE:
-        return False
-    if old_type != "perspective" or new_type != "perspective":
-        return False
-
-    dx = abs(raw_target["x"] - SMOOTHED_TARGET["x"])
-    dy = abs(raw_target["y"] - SMOOTHED_TARGET["y"])
-    return dx > TARGET_MAX_CENTER_JUMP or dy > TARGET_MAX_CENTER_JUMP
-
-
 def smooth_target_rect(target, smooth_x, smooth_y, raw_x, raw_y):
     dx = smooth_x - raw_x
     dy = smooth_y - raw_y
@@ -812,9 +744,6 @@ def smooth_target_rect(target, smooth_x, smooth_y, raw_x, raw_y):
 
 def update_target_tracking(raw_target):
     global SMOOTHED_TARGET, TARGET_LOST_COUNT
-
-    if should_ignore_raw_target(raw_target):
-        raw_target = None
 
     if raw_target:
         if SMOOTHED_TARGET and SMOOTHED_TARGET["type"] == raw_target["type"]:
