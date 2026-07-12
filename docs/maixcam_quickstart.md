@@ -35,12 +35,13 @@ CAMERA_CONTRAST = -1
 After preview works:
 
 1. Run `maixcam/main.py` with the green laser off.
-2. Wait for `laser: CAL x/25` to finish.
-3. Confirm the red target outline is reasonable.
-4. Turn on the green laser and check the blue laser marker.
-5. Check that the `cfg:` line shows the expected config source/version.
-6. Check `aim dx/dy`.
-7. Enable UART only after the screen result is stable.
+2. Wait for `laser: CAL BASE ... KEEP OFF` to finish.
+3. Keep the target visible and wait for `laser: CAL TARGET ... KEEP OFF` to finish.
+4. Confirm the red target outline is reasonable.
+5. Turn on the green laser and check the blue laser marker.
+6. Check that the `cfg:` line shows the expected config source/version.
+7. Check `aim dx/dy`.
+8. Enable UART only after the screen result is stable.
 
 ## Code Roles
 
@@ -157,11 +158,12 @@ LASER_SMOOTHING_ALPHA_X100 = 85
 LASER_LOST_HOLD_FRAMES = 0
 ```
 
-For green laser testing, start the program with the laser off. The first frames are used to learn static green reflections, and the screen shows `laser: CAL ... KEEP OFF` during this period. If the laser was on during calibration, restart the program before trusting the result.
+For green laser testing, start the program with the laser off. The program now uses two calibration phases: `CAL BASE` learns static reflections in the center ROI, then `CAL TARGET` learns fixed reflections near the detected target. Keep the laser off until both phases finish. If the laser was on during calibration, restart the program before trusting the result.
 
 ```python
 LASER_USE_BACKGROUND_CALIB = True
 LASER_BACKGROUND_CALIB_FRAMES = 25
+LASER_TARGET_BACKGROUND_CALIB_FRAMES = 15
 LASER_STATIC_REJECT_DISTANCE = 18
 ```
 

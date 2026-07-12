@@ -23,6 +23,7 @@ laser:
   color: green
   use_background_calib: true
   background_calib_frames: 25
+  target_background_calib_frames: 15
   require_target: true
 
 uart:

@@ -12,3 +12,9 @@ Record useful test results here so the team can compare versions.
 - Added FPS-friendly defaults: no console FPS spam, grid/ROI hidden, target detection every 2 frames.
 - Added optional UART `AIM` output format for main-controller integration.
 - Added tuning guide, field test checklist, and reference review notes.
+
+## 2026-07-12
+
+- Split laser background calibration into `CAL BASE` and `CAL TARGET`.
+- `CAL BASE` learns fixed reflections in the center ROI.
+- `CAL TARGET` learns fixed reflections near the detected target after the red target is visible.

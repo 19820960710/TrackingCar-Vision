@@ -37,8 +37,9 @@ TrackingCar-Vision/
 2. Open MaixVision.
 3. Open `maixcam/main.py`.
 4. Click Run.
-5. Keep the green laser off while `laser: CAL x/25` is shown.
-6. After it changes to `laser: LOST`, point the green laser at the target.
+5. Keep the green laser off while `laser: CAL BASE ... KEEP OFF` is shown.
+6. Keep the target visible and wait for `laser: CAL TARGET ... KEEP OFF` to finish.
+7. After it changes to `laser: LOST`, point the green laser at the target.
 
 For a first camera-only check, run:
 

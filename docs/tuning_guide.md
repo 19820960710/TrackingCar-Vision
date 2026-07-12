@@ -38,7 +38,7 @@ Use `TARGET_MODE = "blob"` only as a fast fallback test.
 
 ## Green Laser Is Not Detected
 
-Start the program with the laser off. Wait until `laser: CAL x/25 KEEP OFF` finishes, then turn the laser on. If the laser was on during calibration, restart the program so the real laser is not learned as a static reflection.
+Start the program with the laser off. Wait until both `laser: CAL BASE ... KEEP OFF` and `laser: CAL TARGET ... KEEP OFF` finish, then turn the laser on. If the laser was on during calibration, restart the program so the real laser is not learned as a static reflection.
 
 If the real laser still shows `LOST`, relax these slightly:
 
@@ -65,12 +65,13 @@ If there is no laser but a point is reported:
 
 ```python
 LASER_BACKGROUND_CALIB_FRAMES = 25
+LASER_TARGET_BACKGROUND_CALIB_FRAMES = 15
 LASER_STATIC_REJECT_DISTANCE = 18
 LASER_STATIC_MIN_HITS = 3
 LASER_AREA_MAX = 90
 ```
 
-Increase calibration frames to learn more fixed reflections. Decrease `LASER_AREA_MAX` if large green patches are being selected.
+Increase calibration frames to learn more fixed reflections. `LASER_BACKGROUND_CALIB_FRAMES` covers the center ROI, and `LASER_TARGET_BACKGROUND_CALIB_FRAMES` covers the target area after the red target is found. Decrease `LASER_AREA_MAX` if large green patches are being selected.
 
 ## FPS Is Too Low
 

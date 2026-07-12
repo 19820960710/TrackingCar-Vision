@@ -47,6 +47,7 @@ try:
         LASER_SMOOTHING_ALPHA_X100,
         LASER_SNAP_DISTANCE,
         LASER_TARGET_BONUS_DISTANCE,
+        LASER_TARGET_BACKGROUND_CALIB_FRAMES,
         LASER_TARGET_ROI_MARGIN,
         LASER_TARGET_LOST_FALLBACK_FRAMES,
         LASER_TRACK_BONUS_DISTANCE,
@@ -148,6 +149,7 @@ except ImportError:
     LASER_MIN_DENSITY_X100 = 22
     LASER_USE_BACKGROUND_CALIB = True
     LASER_BACKGROUND_CALIB_FRAMES = 25
+    LASER_TARGET_BACKGROUND_CALIB_FRAMES = 15
     LASER_STATIC_REJECT_DISTANCE = 18
     LASER_STATIC_MIN_HITS = 3
     LASER_TRACK_BONUS_DISTANCE = 70
@@ -208,7 +210,9 @@ TARGET_LOST_COUNT = 0
 LAST_LASER = None
 SMOOTHED_LASER = None
 LASER_LOST_COUNT = 0
-LASER_CALIB_FRAMES = 0
+LASER_BASE_CALIB_COUNT = 0
+LASER_TARGET_CALIB_COUNT = 0
+LASER_TARGET_CALIB_DONE = False
 LASER_STATIC_POINTS = []
 LASER_CANDIDATE = None
 LASER_CONFIRM_COUNT = 0
@@ -575,8 +579,44 @@ def distance_xy(x1, y1, x2, y2):
     return abs(x1 - x2) + abs(y1 - y2)
 
 
+def laser_base_calibrating():
+    return LASER_USE_BACKGROUND_CALIB and LASER_BASE_CALIB_COUNT < LASER_BACKGROUND_CALIB_FRAMES
+
+
+def laser_target_calibrating():
+    if not LASER_USE_BACKGROUND_CALIB:
+        return False
+    if laser_base_calibrating():
+        return False
+    if LASER_TARGET_BACKGROUND_CALIB_FRAMES <= 0 or LASER_TARGET_CALIB_DONE:
+        return False
+    if not target_laser_roi():
+        return False
+    if LAST_TARGET and "lost_hold" in LAST_TARGET:
+        return False
+    return LASER_TARGET_CALIB_COUNT < LASER_TARGET_BACKGROUND_CALIB_FRAMES
+
+
 def laser_calibrating():
-    return LASER_USE_BACKGROUND_CALIB and LASER_CALIB_FRAMES < LASER_BACKGROUND_CALIB_FRAMES
+    return laser_base_calibrating() or laser_target_calibrating()
+
+
+def laser_calibration_status():
+    if laser_base_calibrating():
+        return "BASE", LASER_BASE_CALIB_COUNT, LASER_BACKGROUND_CALIB_FRAMES
+    if laser_target_calibrating():
+        return "TARGET", LASER_TARGET_CALIB_COUNT, LASER_TARGET_BACKGROUND_CALIB_FRAMES
+    return None, 0, 0
+
+
+def laser_calibration_rois():
+    if laser_base_calibrating():
+        return [get_roi()]
+    if laser_target_calibrating():
+        roi = target_laser_roi()
+        if roi:
+            return [roi]
+    return None
 
 
 def static_point_matches(point, x, y, distance):
@@ -600,7 +640,7 @@ def remember_static_laser_candidate(candidate):
 
 
 def update_laser_background(candidates):
-    global LASER_CALIB_FRAMES
+    global LASER_BASE_CALIB_COUNT, LASER_TARGET_CALIB_COUNT, LASER_TARGET_CALIB_DONE
 
     if not laser_calibrating():
         return False
@@ -608,7 +648,12 @@ def update_laser_background(candidates):
     for candidate in candidates:
         remember_static_laser_candidate(candidate)
 
-    LASER_CALIB_FRAMES += 1
+    if laser_base_calibrating():
+        LASER_BASE_CALIB_COUNT += 1
+    elif laser_target_calibrating():
+        LASER_TARGET_CALIB_COUNT += 1
+        if LASER_TARGET_CALIB_COUNT >= LASER_TARGET_BACKGROUND_CALIB_FRAMES:
+            LASER_TARGET_CALIB_DONE = True
     return True
 
 
@@ -824,11 +869,23 @@ def detect_laser(img):
     if not ENABLE_LASER_DETECT:
         return None
 
-    rois = laser_search_rois()
-    if laser_calibrating() and not rois:
-        update_laser_background([])
+    calibration_rois = laser_calibration_rois()
+    if calibration_rois is not None:
+        calibration_candidates = []
+        for roi in calibration_rois:
+            try:
+                blobs = safe_find_laser_blobs(img, roi)
+            except MemoryError as err:
+                print("find_laser memory low: %s" % err)
+                return None
+            except Exception as err:
+                print("find_laser failed: %s" % err)
+                return None
+            calibration_candidates += laser_blob_candidates(blobs, roi)
+        update_laser_background(calibration_candidates)
         return None
 
+    rois = laser_search_rois()
     for roi in rois:
         try:
             blobs = safe_find_laser_blobs(img, roi)
@@ -840,9 +897,6 @@ def detect_laser(img):
             return None
 
         candidates = laser_blob_candidates(blobs, roi)
-        if update_laser_background(candidates):
-            return None
-
         best = select_laser_candidate(candidates)
         if best:
             return best
@@ -1380,10 +1434,11 @@ def draw_aim_status(img, target, laser):
     if not ENABLE_LASER_DETECT:
         img.draw_string(8, y0 + 20, "laser: OFF", image.COLOR_BLUE)
     elif laser_calibrating():
+        phase, count, total = laser_calibration_status()
         img.draw_string(
             8,
             y0 + 20,
-            "laser: CAL %d/%d KEEP OFF" % (LASER_CALIB_FRAMES, LASER_BACKGROUND_CALIB_FRAMES),
+            "laser: CAL %s %d/%d KEEP OFF" % (phase, count, total),
             image.COLOR_BLUE,
         )
     elif laser:
@@ -1493,7 +1548,10 @@ def print_startup_config():
         DETECT_EVERY_N_FRAMES,
     ))
     if laser_calibrating():
-        print("laser calibration: keep laser OFF for %d frames" % LASER_BACKGROUND_CALIB_FRAMES)
+        print(
+            "laser calibration: keep laser OFF for %d base frames and %d target frames"
+            % (LASER_BACKGROUND_CALIB_FRAMES, LASER_TARGET_BACKGROUND_CALIB_FRAMES)
+        )
 
 
 def main():

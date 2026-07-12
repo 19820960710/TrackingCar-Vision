@@ -11,7 +11,8 @@ Use this checklist before changing code again.
 
 ## Startup
 
-- `laser: CAL x/25 KEEP OFF` appears.
+- `laser: CAL BASE ... KEEP OFF` appears.
+- After the target is visible, `laser: CAL TARGET ... KEEP OFF` appears.
 - The `cfg:` line shows the expected config source/version.
 - The laser remains off during calibration.
 - Calibration finishes and changes to `laser: LOST`.
