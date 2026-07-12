@@ -26,9 +26,11 @@ The main program also uses low-latency camera buffering and skips a few startup 
 CAMERA_BUFFER_NUM = 1
 CAMERA_SKIP_FRAMES = 5
 CAMERA_CONTRAST = -1
+CAMERA_EXPOSURE = 2800
+CAMERA_GAIN = 1
 ```
 
-`CAMERA_CONTRAST = -1` means the program will not force camera contrast by default. Only tune it after the target center is already basically correct.
+`CAMERA_CONTRAST = -1` means the program will not force camera contrast by default. `CAMERA_EXPOSURE = 2800` and `CAMERA_GAIN = 1` are used with manual exposure mode to balance white-paper laser sensitivity and overexposure.
 
 ## Next Vision Stages
 
@@ -63,6 +65,8 @@ After preview works:
 - target-to-laser aiming error
 - FPS state
 - image size and coordinate direction
+
+When the target line shows `FZ1`, `FZ2`, etc., the red target box is briefly frozen because a recent green laser candidate was detected. This protects the target box from being perturbed by the laser spot.
 
 The ROI is centered and covers 80% of the image by default. It is hidden by default for FPS, but can be shown with `SHOW_ROI = True`.
 
@@ -101,7 +105,7 @@ When four corners are found, the red outline follows the tilted quadrilateral an
 The displayed target center is smoothed before use:
 
 ```python
-TARGET_SMOOTHING_ALPHA_X100 = 35
+TARGET_SMOOTHING_ALPHA_X100 = 45
 TARGET_LOST_HOLD_FRAMES = 5
 ```
 
@@ -116,7 +120,12 @@ Default settings:
 ```python
 ENABLE_LASER_DETECT = True
 LASER_COLOR = "green"
-LASER_GREEN_THRESHOLDS = [[70, 100, -128, -12, -128, 127]]
+LASER_GREEN_THRESHOLDS = [
+    [68, 100, -128, -10, -128, 127],
+    [55, 100, -128, -4, -128, 127],
+    [35, 100, -128, -12, -128, 127],
+]
+LASER_CENTER_METHOD = "blob"
 LASER_USE_ROI = False
 LASER_REQUIRE_TARGET = True
 LASER_FALLBACK_FULL_FRAME = False
@@ -149,13 +158,33 @@ Laser detection also requires a candidate to appear for several frames before it
 ```python
 CAMERA_FPS = 60
 PRINT_FPS = False
+SHOW_VERBOSE_STATUS = False
+SHOW_CENTER_GUIDE = False
 SHOW_GRID = False
 SHOW_ROI = False
 DETECT_EVERY_N_FRAMES = 2
-LASER_CONFIRM_FRAMES = 2
-LASER_CONFIRM_DISTANCE = 20
-LASER_SMOOTHING_ALPHA_X100 = 85
-LASER_LOST_HOLD_FRAMES = 0
+TARGET_DETECT_EVERY_N_FRAMES_WHEN_LASER = 3
+TARGET_FREEZE_WHEN_LASER = True
+TARGET_FREEZE_HOLD_FRAMES_AFTER_LASER = 2
+LASER_CONFIRM_FRAMES = 1
+LASER_CONFIRM_DISTANCE = 28
+LASER_CENTER_METHOD = "blob"
+LASER_SMOOTHING_ALPHA_X100 = 100
+LASER_JITTER_DISTANCE = 0
+LASER_JITTER_SMOOTHING_ALPHA_X100 = 100
+LASER_STICK_DISTANCE = 0
+LASER_STICK_SCORE_MARGIN = 0
+LASER_LOST_HOLD_FRAMES = 2
+LASER_AREA_MAX = 320
+LASER_MAX_W = 42
+LASER_MAX_H = 42
+LASER_TARGET_ROI_MARGIN = 48
+LASER_MIN_DENSITY_X100 = 12
+LASER_MIN_ROUNDNESS_X100 = 0
+LASER_MAX_ELONGATION_X100 = 100
+LASER_SCORE_MIN = 0
+LASER_REFINE_CORE = False
+LASER_REFINE_MARGIN = 6
 ```
 
 For green laser testing, start the program with the laser off. The program now uses two calibration phases: `CAL BASE` learns static reflections in the center ROI, then `CAL TARGET` learns fixed reflections near the detected target. Keep the laser off until both phases finish. If the laser was on during calibration, restart the program before trusting the result.

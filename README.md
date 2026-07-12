@@ -53,7 +53,7 @@ Before a formal run, confirm the on-screen `cfg:` line shows the expected source
 
 Recommended final checks:
 
-- Keep the laser off until `laser: CAL ... KEEP OFF` finishes.
+- Keep the laser off until both `laser: CAL BASE ... KEEP OFF` and `laser: CAL TARGET ... KEEP OFF` finish.
 - Record the final values of `DETECT_EVERY_N_FRAMES`, target thresholds, laser thresholds, and UART mode in `docs/experiment_log.md`.
 - If FPS is low, turn off console printing first, then hide grid/ROI/status text before lowering resolution.
 - Confirm `AIM dx/dy` direction on the main controller before enabling motor correction.

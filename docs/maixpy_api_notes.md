@@ -68,7 +68,11 @@ serial_dev.write_str("AIM,1,dx,dy,target_x,target_y,laser_x,laser_y,perspective,
 Green laser threshold:
 
 ```python
-LASER_GREEN_THRESHOLDS = [[70, 100, -128, -12, -128, 127]]
+LASER_GREEN_THRESHOLDS = [
+    [68, 100, -128, -10, -128, 127],
+    [55, 100, -128, -4, -128, 127],
+    [35, 100, -128, -12, -128, 127],
+]
 LASER_REQUIRE_TARGET = True
 LASER_FALLBACK_FULL_FRAME = False
 LASER_USE_TARGET_ROI = True

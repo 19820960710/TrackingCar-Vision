@@ -12,15 +12,42 @@ maixcam_reference:
   height: 320
   fps: 60
   buffer_num: 1
+  exposure: 2800
+  gain: 1
   detect_every_n_frames: 2
+  target_detect_every_n_frames_when_laser: 3
+  target_freeze_when_laser: true
+  target_freeze_hold_frames_after_laser: 2
+  show_verbose_status: false
+  show_center_guide: false
 
 target:
   mode: perspective
   perspective_fallback_blob: true
-  smoothing_alpha_x100: 35
+  smoothing_alpha_x100: 45
 
 laser:
   color: green
+  green_thresholds:
+    - [68, 100, -128, -10, -128, 127]
+    - [55, 100, -128, -4, -128, 127]
+    - [35, 100, -128, -12, -128, 127]
+  center_method: blob
+  area_max: 320
+  max_w: 42
+  max_h: 42
+  target_roi_margin: 48
+  min_density_x100: 12
+  min_roundness_x100: 0
+  max_elongation_x100: 100
+  lost_hold_frames: 2
+  score_min: 0
+  refine_core: false
+  refine_margin: 6
+  jitter_distance: 0
+  jitter_smoothing_alpha_x100: 100
+  stick_distance: 0
+  stick_score_margin: 0
   use_background_calib: true
   background_calib_frames: 25
   target_background_calib_frames: 15

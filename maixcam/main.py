@@ -25,24 +25,34 @@ try:
         ENABLE_LASER_DETECT,
         LASER_AREA_MAX,
         LASER_AREA_MIN,
+        LASER_CENTER_METHOD,
         LASER_COLOR,
         LASER_CONFIRM_DISTANCE,
         LASER_CONFIRM_FRAMES,
         LASER_GREEN_THRESHOLDS,
+        LASER_MAX_ELONGATION_X100,
         LASER_MAX_ASPECT_X100,
         LASER_MAX_H,
         LASER_MAX_W,
         LASER_MIN_H,
+        LASER_MIN_ROUNDNESS_X100,
         LASER_MIN_W,
         LASER_PIXELS_MIN,
+        LASER_JITTER_DISTANCE,
+        LASER_JITTER_SMOOTHING_ALPHA_X100,
         LASER_RED_THRESHOLDS,
         LASER_FALLBACK_FULL_FRAME,
         LASER_BACKGROUND_CALIB_FRAMES,
         LASER_LOST_HOLD_FRAMES,
         LASER_MIN_DENSITY_X100,
+        LASER_REFINE_CORE,
+        LASER_REFINE_MARGIN,
         LASER_REQUIRE_TARGET,
+        LASER_SCORE_MIN,
         LASER_STATIC_MIN_HITS,
         LASER_STATIC_REJECT_DISTANCE,
+        LASER_STICK_DISTANCE,
+        LASER_STICK_SCORE_MARGIN,
         LASER_USE_ROI,
         LASER_SMOOTHING_ALPHA_X100,
         LASER_SNAP_DISTANCE,
@@ -65,6 +75,7 @@ try:
         SHOW_GRID,
         SHOW_ROI,
         SHOW_STATUS_TEXT,
+        SHOW_VERBOSE_STATUS,
         SHOW_TARGET_BOX,
         TARGET_BLOB_CENTER_METHOD,
         TARGET_MARKER_BOX_MAX_H,
@@ -91,6 +102,9 @@ try:
         TARGET_PERSPECTIVE_MIN_H,
         TARGET_PERSPECTIVE_MIN_W,
         TARGET_RECT_THRESHOLD,
+        TARGET_DETECT_EVERY_N_FRAMES_WHEN_LASER,
+        TARGET_FREEZE_HOLD_FRAMES_AFTER_LASER,
+        TARGET_FREEZE_WHEN_LASER,
         TARGET_SMOOTH_MAX_JUMP,
         TARGET_SMOOTHING_ALPHA_X100,
         UART_BAUDRATE,
@@ -112,14 +126,15 @@ except ImportError:
     CAMERA_BUFFER_NUM = 1
     CAMERA_SKIP_FRAMES = 5
     CAMERA_CONTRAST = -1
-    CAMERA_EXPOSURE = -1
-    CAMERA_GAIN = -1
+    CAMERA_EXPOSURE = 2800
+    CAMERA_GAIN = 1
     CAMERA_WB_GAIN = []
     SHOW_FPS = True
+    SHOW_VERBOSE_STATUS = False
     PRINT_FPS = False
     PRINT_TIMING = False
     TIMING_PRINT_EVERY_N_FRAMES = 60
-    SHOW_CENTER_GUIDE = True
+    SHOW_CENTER_GUIDE = False
     SHOW_GRID = False
     SHOW_ROI = False
     SHOW_STATUS_TEXT = True
@@ -129,34 +144,48 @@ except ImportError:
     ENABLE_LASER_DETECT = True
     LASER_COLOR = "green"
     LASER_RED_THRESHOLDS = [[70, 100, 35, 127, -20, 127]]
-    LASER_GREEN_THRESHOLDS = [[70, 100, -128, -12, -128, 127]]
+    LASER_GREEN_THRESHOLDS = [
+        [68, 100, -128, -10, -128, 127],
+        [55, 100, -128, -4, -128, 127],
+        [35, 100, -128, -12, -128, 127],
+    ]
+    LASER_CENTER_METHOD = "blob"
     LASER_USE_ROI = False
     LASER_AREA_MIN = 3
-    LASER_AREA_MAX = 90
+    LASER_AREA_MAX = 320
     LASER_PIXELS_MIN = 3
     LASER_MIN_W = 1
     LASER_MIN_H = 1
-    LASER_MAX_W = 20
-    LASER_MAX_H = 20
-    LASER_MAX_ASPECT_X100 = 260
-    LASER_CONFIRM_FRAMES = 2
-    LASER_CONFIRM_DISTANCE = 20
+    LASER_MAX_W = 42
+    LASER_MAX_H = 42
+    LASER_MAX_ASPECT_X100 = 350
+    LASER_CONFIRM_FRAMES = 1
+    LASER_CONFIRM_DISTANCE = 28
     LASER_REQUIRE_TARGET = True
     LASER_FALLBACK_FULL_FRAME = False
     LASER_USE_TARGET_ROI = True
-    LASER_TARGET_ROI_MARGIN = 28
+    LASER_TARGET_ROI_MARGIN = 48
     LASER_TARGET_LOST_FALLBACK_FRAMES = 0
-    LASER_MIN_DENSITY_X100 = 22
+    LASER_MIN_DENSITY_X100 = 12
+    LASER_MIN_ROUNDNESS_X100 = 0
+    LASER_MAX_ELONGATION_X100 = 100
+    LASER_SCORE_MIN = 0
+    LASER_REFINE_CORE = False
+    LASER_REFINE_MARGIN = 6
     LASER_USE_BACKGROUND_CALIB = True
     LASER_BACKGROUND_CALIB_FRAMES = 25
     LASER_TARGET_BACKGROUND_CALIB_FRAMES = 15
     LASER_STATIC_REJECT_DISTANCE = 18
     LASER_STATIC_MIN_HITS = 3
-    LASER_TRACK_BONUS_DISTANCE = 70
+    LASER_TRACK_BONUS_DISTANCE = 45
+    LASER_STICK_DISTANCE = 0
+    LASER_STICK_SCORE_MARGIN = 0
     LASER_TARGET_BONUS_DISTANCE = 0
-    LASER_SMOOTHING_ALPHA_X100 = 85
-    LASER_SNAP_DISTANCE = 40
-    LASER_LOST_HOLD_FRAMES = 0
+    LASER_SMOOTHING_ALPHA_X100 = 100
+    LASER_JITTER_DISTANCE = 0
+    LASER_JITTER_SMOOTHING_ALPHA_X100 = 100
+    LASER_SNAP_DISTANCE = 80
+    LASER_LOST_HOLD_FRAMES = 2
     PRINT_LASER = False
     ROI_SCALE_NUM = 4
     ROI_SCALE_DEN = 5
@@ -180,7 +209,7 @@ except ImportError:
     TARGET_BLOB_MIN_H = 6
     TARGET_BLOB_MAX_ASPECT_X100 = 350
     TARGET_SMOOTH_MAX_JUMP = 80
-    TARGET_SMOOTHING_ALPHA_X100 = 35
+    TARGET_SMOOTHING_ALPHA_X100 = 45
     TARGET_LOST_HOLD_FRAMES = 5
     TARGET_CIRCLE_THRESHOLD = 3000
     TARGET_RECT_THRESHOLD = 10000
@@ -189,6 +218,9 @@ except ImportError:
     TARGET_MIN_RECT_W = 20
     TARGET_MIN_RECT_H = 20
     DETECT_EVERY_N_FRAMES = 2
+    TARGET_DETECT_EVERY_N_FRAMES_WHEN_LASER = 3
+    TARGET_FREEZE_WHEN_LASER = True
+    TARGET_FREEZE_HOLD_FRAMES_AFTER_LASER = 2
     PRINT_TARGET = False
     ENABLE_UART_OUTPUT = False
     UART_PORT = "/dev/ttyS1"
@@ -207,6 +239,7 @@ FRAME_INDEX = 0
 LAST_TARGET = None
 SMOOTHED_TARGET = None
 TARGET_LOST_COUNT = 0
+TARGET_FREEZE_COUNT = 0
 LAST_LASER = None
 SMOOTHED_LASER = None
 LASER_LOST_COUNT = 0
@@ -262,11 +295,30 @@ def call_camera_methods(cam, method_names, value):
     return False
 
 
+def set_manual_exposure_mode(cam):
+    try:
+        return cam.exp_mode(camera.AeMode.Manual)
+    except Exception:
+        pass
+
+    try:
+        return cam.exp_mode(1)
+    except Exception as err:
+        print("camera manual exposure mode failed: %s" % err)
+        return None
+
+
 def apply_camera_tuning(cam):
+    if camera_setting_enabled(CAMERA_EXPOSURE) or camera_setting_enabled(CAMERA_GAIN):
+        set_manual_exposure_mode(cam)
     if camera_setting_enabled(CAMERA_EXPOSURE):
-        call_camera_methods(cam, ["exposure"], CAMERA_EXPOSURE)
+        actual = call_camera_methods(cam, ["exposure"], CAMERA_EXPOSURE)
+        if actual:
+            print("camera exposure set: %d" % CAMERA_EXPOSURE)
     if camera_setting_enabled(CAMERA_GAIN):
-        call_camera_methods(cam, ["gain"], CAMERA_GAIN)
+        actual = call_camera_methods(cam, ["gain"], CAMERA_GAIN)
+        if actual:
+            print("camera gain set: %d" % CAMERA_GAIN)
     if camera_setting_enabled(CAMERA_CONTRAST):
         call_camera_methods(cam, ["constrast", "contrast"], CAMERA_CONTRAST)
 
@@ -506,8 +558,15 @@ def laser_thresholds():
     return LASER_RED_THRESHOLDS
 
 
-def safe_find_laser_blobs(img, roi=None):
-    thresholds = laser_thresholds()
+def laser_core_thresholds():
+    if LASER_COLOR == "green" and LASER_GREEN_THRESHOLDS:
+        return [LASER_GREEN_THRESHOLDS[0]]
+    return laser_thresholds()
+
+
+def safe_find_laser_blobs(img, roi=None, thresholds=None):
+    if thresholds is None:
+        thresholds = laser_thresholds()
     try:
         if roi:
             return img.find_blobs(
@@ -558,6 +617,9 @@ def blob_center(blob, rect):
 
 
 def laser_blob_center(blob, rect):
+    if LASER_CENTER_METHOD == "rect":
+        return rect_center(rect)
+
     try:
         return blob.cx(), blob.cy()
     except Exception:
@@ -573,6 +635,14 @@ def blob_pixels(blob, fallback):
         return int(blob.pixels())
     except Exception:
         return fallback
+
+
+def blob_ratio_x100(blob, method_name, fallback_x100):
+    try:
+        method = getattr(blob, method_name)
+        return int(method() * 100)
+    except Exception:
+        return fallback_x100
 
 
 def distance_xy(x1, y1, x2, y2):
@@ -789,15 +859,15 @@ def detect_blobs(img):
     return best
 
 
-def laser_candidate_score(x, y, area, pixels, density_x100, aspect_x100):
-    score = pixels * 12 + density_x100 * 3 - area - aspect_x100 * 3
+def laser_candidate_score(x, y, area, pixels, density_x100, aspect_x100, roundness_x100, elongation_x100):
+    extra_aspect_x100 = max(0, aspect_x100 - 100)
+    score = pixels * 12 + density_x100 * 3 + roundness_x100 * 3 - area
+    score -= extra_aspect_x100 * 5 + elongation_x100 * 2
 
     if LAST_LASER:
         dist = distance_xy(x, y, LAST_LASER["x"], LAST_LASER["y"])
         if dist <= LASER_TRACK_BONUS_DISTANCE:
             score += (LASER_TRACK_BONUS_DISTANCE - dist) * 5
-        else:
-            score -= min(dist, LASER_TRACK_BONUS_DISTANCE * 2)
 
     if LAST_TARGET and LASER_TARGET_BONUS_DISTANCE > 0:
         dist = distance_xy(x, y, LAST_TARGET["x"], LAST_TARGET["y"])
@@ -835,7 +905,18 @@ def laser_blob_candidates(blobs, roi=None):
         if aspect_x100 > LASER_MAX_ASPECT_X100:
             continue
 
-        score = laser_candidate_score(x, y, area, pixels, density_x100, aspect_x100)
+        roundness_x100 = blob_ratio_x100(blob, "roundness", 100)
+        if roundness_x100 < LASER_MIN_ROUNDNESS_X100:
+            continue
+
+        elongation_x100 = blob_ratio_x100(blob, "elongation", 0)
+        if elongation_x100 > LASER_MAX_ELONGATION_X100:
+            continue
+
+        score = laser_candidate_score(x, y, area, pixels, density_x100, aspect_x100, roundness_x100, elongation_x100)
+        if score < LASER_SCORE_MIN:
+            continue
+
         candidates.append({
             "found": True,
             "type": "laser",
@@ -845,6 +926,8 @@ def laser_blob_candidates(blobs, roi=None):
             "score": score,
             "pixels": pixels,
             "density_x100": density_x100,
+            "roundness_x100": roundness_x100,
+            "elongation_x100": elongation_x100,
         })
 
     return candidates
@@ -853,6 +936,8 @@ def laser_blob_candidates(blobs, roi=None):
 def select_laser_candidate(candidates):
     best = None
     best_score = None
+    sticky = None
+    sticky_score = None
     for candidate in candidates:
         if laser_is_static_candidate(candidate):
             continue
@@ -862,7 +947,45 @@ def select_laser_candidate(candidates):
             best_score = score
             best = candidate
 
+        if LAST_LASER:
+            dist = distance_xy(candidate["x"], candidate["y"], LAST_LASER["x"], LAST_LASER["y"])
+            if dist <= LASER_STICK_DISTANCE and (sticky_score is None or score > sticky_score):
+                sticky_score = score
+                sticky = candidate
+
+    if sticky and best_score is not None and sticky_score + LASER_STICK_SCORE_MARGIN >= best_score:
+        sticky["sticky"] = True
+        return sticky
+
     return best
+
+
+def refine_laser_candidate(img, candidate):
+    if not LASER_REFINE_CORE or LASER_COLOR != "green" or not candidate:
+        return candidate
+    if "rect" not in candidate:
+        return candidate
+
+    rect = candidate["rect"]
+    margin = LASER_REFINE_MARGIN
+    roi = clamp_rect(
+        rect[0] - margin,
+        rect[1] - margin,
+        rect[2] + margin * 2,
+        rect[3] + margin * 2,
+    )
+    try:
+        blobs = safe_find_laser_blobs(img, roi, laser_core_thresholds())
+    except Exception:
+        return candidate
+
+    refined = select_laser_candidate(laser_blob_candidates(blobs, roi))
+    if refined:
+        refined["refined"] = True
+        refined["raw_x"] = candidate["x"]
+        refined["raw_y"] = candidate["y"]
+        return refined
+    return candidate
 
 
 def detect_laser(img):
@@ -899,7 +1022,7 @@ def detect_laser(img):
         candidates = laser_blob_candidates(blobs, roi)
         best = select_laser_candidate(candidates)
         if best:
-            return best
+            return refine_laser_candidate(img, best)
 
     return None
 
@@ -953,8 +1076,11 @@ def smooth_laser(raw_laser):
         move = distance_xy(old_x, old_y, new_x, new_y)
 
         if move <= LASER_SNAP_DISTANCE:
-            laser["x"] = weighted_value(old_x, new_x, LASER_SMOOTHING_ALPHA_X100)
-            laser["y"] = weighted_value(old_y, new_y, LASER_SMOOTHING_ALPHA_X100)
+            alpha = LASER_SMOOTHING_ALPHA_X100
+            if move <= LASER_JITTER_DISTANCE:
+                alpha = LASER_JITTER_SMOOTHING_ALPHA_X100
+            laser["x"] = weighted_value(old_x, new_x, alpha)
+            laser["y"] = weighted_value(old_y, new_y, alpha)
             laser["stable"] = True
             smooth_laser_rect(laser, laser["x"], laser["y"], new_x, new_y)
 
@@ -1321,18 +1447,18 @@ def draw_status_text(img, fps):
     if not SHOW_STATUS_TEXT:
         return
 
+    if SHOW_FPS:
+        img.draw_string(8, 8, "FPS: %.1f %s" % (fps, fps_state(fps)), image.COLOR_GREEN)
+    if not SHOW_VERBOSE_STATUS:
+        return
+
     center_x, center_y = frame_center()
     roi_x, roi_y, roi_w, roi_h = get_roi()
-
-    img.draw_string(8, 8, "TrackingCar Vision", image.COLOR_GREEN)
     img.draw_string(8, 28, "stage: %s" % STAGE_NAME, image.COLOR_GREEN)
-    if SHOW_FPS:
-        img.draw_string(8, 48, "FPS: %.1f %s" % (fps, fps_state(fps)), image.COLOR_GREEN)
-    img.draw_string(8, 68, "size: %dx%d" % (CAMERA_WIDTH, CAMERA_HEIGHT), image.COLOR_GREEN)
-    img.draw_string(8, 88, "center: (%d,%d)" % (center_x, center_y), image.COLOR_GREEN)
-    img.draw_string(8, 108, "roi: (%d,%d,%d,%d)" % (roi_x, roi_y, roi_w, roi_h), image.COLOR_GREEN)
-    img.draw_string(8, 128, "x->right  y->down", image.COLOR_GREEN)
-    img.draw_string(8, 148, "cfg: %s %s" % (CONFIG_SOURCE, CONFIG_VERSION), image.COLOR_GREEN)
+    img.draw_string(8, 48, "size: %dx%d" % (CAMERA_WIDTH, CAMERA_HEIGHT), image.COLOR_GREEN)
+    img.draw_string(8, 68, "center: (%d,%d)" % (center_x, center_y), image.COLOR_GREEN)
+    img.draw_string(8, 88, "roi: (%d,%d,%d,%d)" % (roi_x, roi_y, roi_w, roi_h), image.COLOR_GREEN)
+    img.draw_string(8, 108, "cfg: %s %s" % (CONFIG_SOURCE, CONFIG_VERSION), image.COLOR_GREEN)
 
 
 def clip_rect_to_frame(x, y, w, h):
@@ -1427,7 +1553,15 @@ def draw_laser_marker(img, laser):
 def draw_aim_status(img, target, laser):
     y0 = CAMERA_HEIGHT - 64
     if target:
-        img.draw_string(8, y0, "target: %s (%d,%d)" % (target["type"], target["x"], target["y"]), image.COLOR_RED)
+        freeze_text = ""
+        if TARGET_FREEZE_COUNT > 0:
+            freeze_text = " FZ%d" % TARGET_FREEZE_COUNT
+        img.draw_string(
+            8,
+            y0,
+            "target: %s (%d,%d)%s" % (target["type"], target["x"], target["y"], freeze_text),
+            image.COLOR_RED,
+        )
     else:
         img.draw_string(8, y0, "target: LOST", image.COLOR_RED)
 
@@ -1501,17 +1635,36 @@ def print_timing_if_due(target_ms, laser_ms, total_ms):
 
 def process_frame(img, fps):
     """Detect the target and draw the debug view."""
-    global FRAME_INDEX, LAST_TARGET, LAST_LASER
+    global FRAME_INDEX, LAST_TARGET, LAST_LASER, TARGET_FREEZE_COUNT
 
     total_start_ms = time_ticks_ms()
     target_ms = -1
     laser_ms = -1
     FRAME_INDEX += 1
-    target_due = (
-        DETECT_EVERY_N_FRAMES <= 1
+
+    laser_first = LAST_TARGET is not None
+    if laser_first:
+        laser_start_ms = time_ticks_ms()
+        raw_laser = detect_laser(img)
+        if raw_laser and TARGET_FREEZE_HOLD_FRAMES_AFTER_LASER > 0:
+            TARGET_FREEZE_COUNT = TARGET_FREEZE_HOLD_FRAMES_AFTER_LASER
+        elif TARGET_FREEZE_COUNT > 0:
+            TARGET_FREEZE_COUNT -= 1
+        LAST_LASER = update_laser_tracking(raw_laser)
+        laser_ms = elapsed_ms(laser_start_ms)
+
+    active_laser = LAST_LASER and "lost_hold" not in LAST_LASER and not laser_calibrating()
+    recent_laser = TARGET_FREEZE_COUNT > 0 or (LAST_LASER is not None and not laser_calibrating())
+    target_interval = DETECT_EVERY_N_FRAMES
+    if LAST_TARGET and recent_laser and TARGET_DETECT_EVERY_N_FRAMES_WHEN_LASER > target_interval:
+        target_interval = TARGET_DETECT_EVERY_N_FRAMES_WHEN_LASER
+    target_interval_due = (
+        target_interval <= 1
         or FRAME_INDEX == 1
-        or FRAME_INDEX % DETECT_EVERY_N_FRAMES == 0
+        or FRAME_INDEX % target_interval == 0
     )
+    target_frozen = TARGET_FREEZE_COUNT > 0 and TARGET_FREEZE_WHEN_LASER
+    target_due = not LAST_TARGET or (not target_frozen and target_interval_due)
 
     if target_due:
         target_start_ms = time_ticks_ms()
@@ -1519,9 +1672,15 @@ def process_frame(img, fps):
         target_ms = elapsed_ms(target_start_ms)
         LAST_TARGET = update_target_tracking(raw_target)
 
-    laser_start_ms = time_ticks_ms()
-    LAST_LASER = update_laser_tracking(detect_laser(img))
-    laser_ms = elapsed_ms(laser_start_ms)
+    if not laser_first:
+        laser_start_ms = time_ticks_ms()
+        raw_laser = detect_laser(img)
+        if raw_laser and TARGET_FREEZE_HOLD_FRAMES_AFTER_LASER > 0:
+            TARGET_FREEZE_COUNT = TARGET_FREEZE_HOLD_FRAMES_AFTER_LASER
+        elif TARGET_FREEZE_COUNT > 0:
+            TARGET_FREEZE_COUNT -= 1
+        LAST_LASER = update_laser_tracking(raw_laser)
+        laser_ms = elapsed_ms(laser_start_ms)
 
     target = LAST_TARGET
     laser = LAST_LASER
@@ -1546,6 +1705,16 @@ def print_startup_config():
         CAMERA_HEIGHT,
         CAMERA_FPS,
         DETECT_EVERY_N_FRAMES,
+    ))
+    print("camera tuning: exposure=%d gain=%d contrast=%d" % (
+        CAMERA_EXPOSURE,
+        CAMERA_GAIN,
+        CAMERA_CONTRAST,
+    ))
+    print("target laser mode: refresh=%d freeze=%s hold=%d" % (
+        TARGET_DETECT_EVERY_N_FRAMES_WHEN_LASER,
+        str(TARGET_FREEZE_WHEN_LASER),
+        TARGET_FREEZE_HOLD_FRAMES_AFTER_LASER,
     ))
     if laser_calibrating():
         print(
