@@ -84,20 +84,25 @@ The reusable MSPM0G3507 receiver code is in:
 mspm0/vision_comm/
 ```
 
-It is split into two low-coupling modules:
+It is split into protocol, contract and UART-driver layers:
 
-- `vision_uart.c/.h`: UART0 receive, line buffering, packet cache
-- `vision_packet.c/.h`: `AIM,...` parser
+- `vision_observation.c/.h`: protocol-independent target observation and
+  freshness check
+- `vision_packet.c/.h`: `AIM,...` / `TV,...` parser and conversion
+- `vision_uart.c/.h`: board-selected UART receive, RX ring buffer and latest
+  observation cache
 
 Recommended wiring for the default MaixCAM Pro UART pins:
 
 ```text
-MaixCAM Pro A19 TX -> MSPM0G3507 PA11 UART0_RX
-MaixCAM Pro A18 RX <- MSPM0G3507 PA10 UART0_TX
-MaixCAM Pro GND    -> MSPM0G3507 GND
+MaixCAM Pro A19 TX -> board UART4 RX / MSPM0 PB3 (UART3_RX)
+MaixCAM Pro A18 RX <- board UART4 TX / MSPM0 PB2 (UART3_TX)
+MaixCAM Pro GND    -> board UART4 GND
 ```
 
-On MSPM0G3507, configure UART0 as 115200 baud, no RTS/CTS, RX interrupt enabled.
+Only join TX, RX and GND; do not connect the UART4 5 V pin to MaixCAM power.
+Configure MCU UART3 at 115200 baud, no RTS/CTS, RX and RX-timeout interrupts.
+Board UART3 and UART5 remain reserved for yaw and pitch X42S drivers.
 
 ## Target Mode
 
