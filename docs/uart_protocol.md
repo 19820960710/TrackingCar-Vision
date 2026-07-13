@@ -76,6 +76,29 @@ dy > 0: laser is above target, move correction down
 
 Check motor direction on the real gimbal. If movement is reversed, flip the sign in the controller.
 
+## MSPM0G3507 Receiver Module
+
+The reusable MSPM0G3507 receiver code is in:
+
+```text
+mspm0/vision_comm/
+```
+
+It is split into two low-coupling modules:
+
+- `vision_uart.c/.h`: UART0 receive, line buffering, packet cache
+- `vision_packet.c/.h`: `AIM,...` parser
+
+Recommended wiring for the default MaixCAM Pro UART pins:
+
+```text
+MaixCAM Pro A19 TX -> MSPM0G3507 PA11 UART0_RX
+MaixCAM Pro A18 RX <- MSPM0G3507 PA10 UART0_TX
+MaixCAM Pro GND    -> MSPM0G3507 GND
+```
+
+On MSPM0G3507, configure UART0 as 115200 baud, no RTS/CTS, RX interrupt enabled.
+
 ## Target Mode
 
 For older target-only tests, use:

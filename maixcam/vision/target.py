@@ -1,24 +1,48 @@
 from settings import *
 from app import runtime_state as state
 from vision.geometry import *
+
+
+def target_search_roi():
+    if not TARGET_USE_TRACKING_ROI:
+        return get_roi()
+    if not state.LAST_TARGET or "rect" not in state.LAST_TARGET:
+        return get_roi()
+    if "lost_hold" in state.LAST_TARGET:
+        return get_roi()
+    if TARGET_FULL_SEARCH_EVERY_N_FRAMES > 0 and state.FRAME_INDEX % TARGET_FULL_SEARCH_EVERY_N_FRAMES == 0:
+        return get_roi()
+
+    rect = state.LAST_TARGET["rect"]
+    margin = TARGET_TRACKING_ROI_MARGIN
+    return clamp_rect(
+        rect[0] - margin,
+        rect[1] - margin,
+        rect[2] + margin * 2,
+        rect[3] + margin * 2,
+    )
+
+
 def safe_find_circles(img):
-    roi = get_roi()
+    roi = target_search_roi()
     try:
         return img.find_circles(roi=roi, threshold=TARGET_CIRCLE_THRESHOLD)
     except TypeError:
         return img.find_circles(threshold=TARGET_CIRCLE_THRESHOLD)
 
 
-def safe_find_rects(img):
-    roi = get_roi()
+def safe_find_rects(img, roi=None):
+    if roi is None:
+        roi = target_search_roi()
     try:
         return img.find_rects(roi=roi, threshold=TARGET_RECT_THRESHOLD)
     except TypeError:
         return img.find_rects(threshold=TARGET_RECT_THRESHOLD)
 
 
-def safe_find_blobs(img):
-    roi = get_roi()
+def safe_find_blobs(img, roi=None):
+    if roi is None:
+        roi = target_search_roi()
     try:
         return img.find_blobs(
             TARGET_BLOB_THRESHOLDS,
@@ -32,6 +56,55 @@ def safe_find_blobs(img):
             area_threshold=TARGET_BLOB_AREA_MIN,
             pixels_threshold=TARGET_BLOB_PIXELS_MIN,
         )
+
+
+def find_largest_black_blob_roi(img, search_roi):
+    if not TARGET_RECT_USE_BLOB_ROI:
+        return None
+
+    try:
+        blobs = safe_find_blobs(img, search_roi)
+    except MemoryError as err:
+        print("find_target_blob_roi memory low: %s" % err)
+        return None
+    except Exception as err:
+        print("find_target_blob_roi failed: %s" % err)
+        return None
+
+    best_rect = None
+    best_score = -1
+    for blob in blobs:
+        rect = blob_rect(blob)
+        x, y = blob_center(blob, rect)
+        w = rect[2]
+        h = rect[3]
+        if search_roi and not point_in_rect(x, y, search_roi):
+            continue
+        if w < TARGET_BLOB_MIN_W or h < TARGET_BLOB_MIN_H:
+            continue
+
+        long_side = max(w, h)
+        short_side = max(1, min(w, h))
+        aspect_x100 = long_side * 100 // short_side
+        if aspect_x100 > TARGET_BLOB_MAX_ASPECT_X100:
+            continue
+
+        pixels = blob_pixels(blob, rect_area(rect))
+        if pixels > best_score:
+            best_score = pixels
+            best_rect = rect
+
+    if not best_rect:
+        return None
+
+    margin = TARGET_RECT_BLOB_ROI_MARGIN
+    return clamp_rect(
+        best_rect[0] - margin,
+        best_rect[1] - margin,
+        best_rect[2] + margin * 2,
+        best_rect[3] + margin * 2,
+    )
+
 
 def detect_blobs(img):
     try:
@@ -272,12 +345,27 @@ def smooth_target_rect(target, smooth_x, smooth_y, raw_x, raw_y):
     dx = smooth_x - raw_x
     dy = smooth_y - raw_y
 
-    if "rect" not in target:
-        pass
-    else:
+    if "corners" in target and state.SMOOTHED_TARGET and "corners" in state.SMOOTHED_TARGET:
+        old_corners = state.SMOOTHED_TARGET["corners"]
+        if len(old_corners) == len(target["corners"]):
+            for index, point in enumerate(target["corners"]):
+                point[0] = weighted_value(old_corners[index][0], point[0], TARGET_CORNER_SMOOTHING_ALPHA_X100)
+                point[1] = weighted_value(old_corners[index][1], point[1], TARGET_CORNER_SMOOTHING_ALPHA_X100)
+            target["rect"] = quad_bounds(target["corners"])
+            target["x"], target["y"] = diagonal_center(target["corners"])
+            return
+
+    if "rect" in target:
         rect = target["rect"]
-        rect[0] += dx
-        rect[1] += dy
+        if state.SMOOTHED_TARGET and "rect" in state.SMOOTHED_TARGET:
+            old_rect = state.SMOOTHED_TARGET["rect"]
+            rect[2] = weighted_value(old_rect[2], rect[2], TARGET_SIZE_SMOOTHING_ALPHA_X100)
+            rect[3] = weighted_value(old_rect[3], rect[3], TARGET_SIZE_SMOOTHING_ALPHA_X100)
+            rect[0] = smooth_x - rect[2] // 2
+            rect[1] = smooth_y - rect[3] // 2
+        else:
+            rect[0] += dx
+            rect[1] += dy
 
     if "corners" in target:
         for point in target["corners"]:
