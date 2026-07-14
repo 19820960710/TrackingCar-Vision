@@ -204,6 +204,14 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# Keil local build and debug state
+mspm0/firmware/keil/Objects/
+mspm0/firmware/keil/*.axf
+mspm0/firmware/keil/*.hex
+mspm0/firmware/keil/*.map
+mspm0/firmware/keil/*.uvoptx
+mspm0/firmware/keil/*.uvguix
+
 # Ruff stuff:
 .ruff_cache/
 
