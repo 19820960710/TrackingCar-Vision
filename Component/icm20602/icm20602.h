@@ -27,6 +27,7 @@
 #define _ICM20602_H_
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /**
  * @brief 欧拉角姿态输出 (单位: °)
@@ -61,6 +62,28 @@ int icm20602_is_ready(void);
  *         内部突发读 14 字节 (0x3B..0x48: AccXYZ + Temp + GyroXYZ)。
  */
 int icm20602_get_attitude(icm_attitude_t *out);
+
+/* ── 异步读取 (1kHz 高频, I2C 中断驱动) ── */
+
+/**
+ * @brief  启动一次异步 I2C 读取 (非阻塞, 立即返回)
+ * @return 0=已启动, -1=忙/出错
+ * @note   启动后 CPU 可做其他事; 完成后用 icm20602_async_is_complete() 轮询,
+ *         完成后调 icm20602_async_finish() 做解算并填充 out。
+ *         需先调 icm20602_int_enable() 使能 I2C 中断。
+ */
+int icm20602_async_start(void);
+
+/** 查询异步读取是否完成。true=数据就绪可解算。 */
+bool icm20602_async_is_complete(void);
+
+/**
+ * @brief  取回异步读取结果并做 Mahony 解算
+ * @param  out  姿态输出
+ * @return 0=成功, -1=读取出错/未完成
+ * @note   必须在 icm20602_async_is_complete() 为 true 后调用。
+ */
+int icm20602_async_finish(icm_attitude_t *out);
 
 /* ── INT 引脚接口 (保留框架, 当前未接线, 轮询模式下不依赖) ── */
 

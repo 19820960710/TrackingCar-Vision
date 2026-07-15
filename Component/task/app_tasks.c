@@ -26,6 +26,7 @@
 #include "icm20602/icm20602.h"
 #include "encoder/encoder.h"
 #include "service/speed_service.h"
+#include "common/i2c_bus.h"     /* i2c0_irq_handler (I2C 异步读中断) */
 #include "service/attitude_service.h"
 #include "service/yaw_loop_service.h"
 #include "common/util.h"
@@ -146,9 +147,10 @@ static void led_task(void *pvParameters)
     }
 }
 
-/* 姿态任务：ICM20602 10ms 定时轮询驱动，Mahony 解算后送入稳定检测。
- * 当前未接 INT 脚，采用 vTaskDelay(10ms) 轮询; 保留 ISR 通知框架，
- * 接上 INT 后通知会额外唤醒任务 (不冲突)。
+/* 姿态任务：ICM20602 1kHz 异步读取 (I2C 中断驱动) + Mahony 解算。
+ * 流程: 启动异步 I2C 读取 → 阻塞等 I2C 完成通知 → 解算 → 下一帧。
+ * I2C 读取在后台传输(~500µs), CPU 此时可被其他任务占用, 不再阻塞轮询。
+ * 传感器已配 1kHz 输出 (SMPLRT_DIV=0), 任务以 I2C 完成为节拍(~1kHz)。
  * 复位后等待 pitch/roll/yaw 在稳定窗口内满足阈值才发布姿态。 */
 static void attitude_task(void *pvParameters)
 {
@@ -167,13 +169,23 @@ static void attitude_task(void *pvParameters)
     attitude_service_reset();
     (void)ulTaskNotifyTake(pdTRUE, 0);   /* 清除启动期间残留通知 */
     for (;;) {
-        /* 10ms 轮询读取 + Mahony 解算 (100Hz)。 */
-        icm_attitude_t att;
-        if (icm20602_get_attitude(&att) == 0) {
-            attitude_service_process_sample(att.pitch, att.roll, att.yaw);
+        /* 启动异步读取 (非阻塞, 立即返回)。 */
+        if (icm20602_async_start() != 0) {
+            /* 启动失败 (总线忙/错误): 等一帧重试。 */
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
         }
-        /* 若 INT 已接线，此通知会提前唤醒; 否则 10ms 到期后继续。 */
-        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
+        /* 阻塞等 I2C 完成中断通知 (来自 I2C_0_INST_IRQHandler)。
+         * 超时兑底 2ms, 防止中断丢失导致死锁。 */
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2));
+
+        /* 检查是否完成 → 解算 → 发布。 */
+        if (icm20602_async_is_complete()) {
+            icm_attitude_t att;
+            if (icm20602_async_finish(&att) == 0) {
+                attitude_service_process_sample(att.pitch, att.roll, att.yaw);
+            }
+        }
     }
 }
 
@@ -394,7 +406,22 @@ void GROUP1_IRQHandler(void)
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
-/* TIMER_0 10ms 统一节拍：ZERO 中断唤醒 yaw_loop_task，由 yaw 环再通知速度环。 */
+/* I2C0 控制器中断: ICM20602 异步读取完成 → 通知 attitude_task 解算。
+ * 实际数据处理在 i2c0_irq_handler 内 (填缓冲区 + 置完成标志),
+ * 此处仅转发任务通知。 */
+void I2C_0_INST_IRQHandler(void)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    i2c0_irq_handler();
+
+    if (icm20602_async_is_complete() && g_attitude_task_handle != NULL) {
+        vTaskNotifyGiveFromISR(g_attitude_task_handle,
+                               &xHigherPriorityTaskWoken);
+    }
+
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
 void TIMER_0_INST_IRQHandler(void)
 {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;

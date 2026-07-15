@@ -192,13 +192,15 @@ static void icm_register_init(void)
     delay_ms(10);
 
     /* 采样率: DLPF 使能后内部采样 1kHz, SMPLRT_DIV = 1kHz/rate - 1 */
-    smplrt_div = (uint8_t)(1000 / 100 - 1);    /* 100Hz → 9 */
+    smplrt_div = (uint8_t)(1000 / 1000 - 1);   /* 1kHz → 0 (传感器最大输出) */
     icm_write_reg(ICM20602_SMPLRT_DIV, smplrt_div);
 
-    icm_write_reg(ICM20602_CONFIG,         Band_5Hz);     /* 陀螺 DLPF 5Hz */
-    icm_write_reg(ICM20602_GYRO_CONFIG,    gyro_250);     /* ±250°/s */
-    icm_write_reg(ICM20602_ACCEL_CONFIG,   acc_2g);       /* ±2g */
-    icm_write_reg(ICM20602_ACCEL_CONFIG_2, Band_5Hz);     /* 加速度 DLPF 5Hz (ICM20602 独有) */
+    /* DLPF: 1kHz 下用 92Hz (Band_92Hz), 滤波延迟小, 适合高速解算。
+     * 旧 100Hz 用 5Hz; 1kHz 若仍用 5Hz 会严重滞后。 */
+    icm_write_reg(ICM20602_CONFIG,         Band_92Hz);   /* 陀螺 DLPF 92Hz */
+    icm_write_reg(ICM20602_GYRO_CONFIG,    gyro_250);    /* ±250°/s */
+    icm_write_reg(ICM20602_ACCEL_CONFIG,   acc_2g);      /* ±2g */
+    icm_write_reg(ICM20602_ACCEL_CONFIG_2, Band_92Hz);   /* 加速度 DLPF 92Hz */
     icm_write_reg(ICM20602_FIFO_EN,        0x00);         /* 关 FIFO */
 
     /* INT 引脚: 低有效, 推挽, 50us 脉冲 (不锁存) → 下降沿触发。
@@ -244,12 +246,12 @@ static void icm_soft_calibrate_z(void)
  * 数据来源: 从 0x3B 突发读 14 字节 (AccX/Y/Z + 温度2B + GyroX/Y/Z)
  * 算法: Mahony 互补滤波 (动态 Kp/Ki, yaw 静止锁定, 手动漂移补偿)
  *
- * @param  out  姿态输出 (°), 失败时不填充
- * @return 0=成功, -1=I2C 读取失败
+ * @param  buf  14 字节原始数据 (0x3B..0x48: AccXYZ + Temp + GyroXYZ)
+ * @param  out  姿态输出 (°)
+ * @return 0=成功
  */
-static int icm_mahony_update(icm_attitude_t *out)
+static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
 {
-    uint8_t buf[14];
     int16_t acc_x, acc_y, acc_z;
     int16_t gyr_x, gyr_y, gyr_z;
     float ax, ay, az, gx, gy, gz;
@@ -258,10 +260,6 @@ static int icm_mahony_update(icm_attitude_t *out)
     float twoKp, twoKi;
     float dt;
     uint32_t now_ms;
-
-    /* ── 突发读 14 字节: 0x3B..0x48 (AccXYZ + Temp + GyroXYZ) ── */
-    if (i2c0_read(ICM20602_ADDR, ICM20602_ACCEL_XOUT_H, 14, buf) != 0)
-        return -1;
 
     acc_x = ((int16_t)buf[0]  << 8) | buf[1];
     acc_y = ((int16_t)buf[2]  << 8) | buf[3];
@@ -495,24 +493,66 @@ int icm20602_is_ready(void)
 
 int icm20602_get_attitude(icm_attitude_t *out)
 {
+    uint8_t buf[14];
+
     if (out == NULL) {
         return -1;
     }
     if (!g_icm20602_ready) {
         return -2;
     }
-    return icm_mahony_update(out);
+    if (i2c0_read(ICM20602_ADDR, ICM20602_ACCEL_XOUT_H, 14, buf) != 0) {
+        return -1;
+    }
+    return icm_mahony_solve(buf, out);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- *  INT 引脚中断接口 (保留框架, 当前未接线, 轮询模式下不依赖)
+ *  异步读取 (1kHz 高频, I2C 中断驱动)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static uint8_t g_async_buf[14];   /* 异步读接收缓冲区 (模块持有) */
+
+int icm20602_async_start(void)
+{
+    if (!g_icm20602_ready) {
+        return -1;
+    }
+    return i2c0_read_async(ICM20602_ADDR, ICM20602_ACCEL_XOUT_H, 14, g_async_buf);
+}
+
+bool icm20602_async_is_complete(void)
+{
+    return (i2c0_async_get_status() == I2C0_ASYNC_RX_COMPLETE);
+}
+
+int icm20602_async_finish(icm_attitude_t *out)
+{
+    if (out == NULL) {
+        return -1;
+    }
+    if (i2c0_async_get_status() != I2C0_ASYNC_RX_COMPLETE) {
+        return -1;   /* 未完成或出错 */
+    }
+    /* 复位异步状态为 IDLE, 允许下一次启动 */
+    return icm_mahony_solve(g_async_buf, out);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  中断接口
+ *  ── ICM20602 INT 引脚 (PB4): 保留框架, 当前未接线 ──
+ *  ── I2C0 控制器中断: 异步读取完成通知, 1kHz 模式必需 ──
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 void icm20602_int_enable(void)
 {
+    /* ICM20602 INT 引脚 (PB4) 中断: 保留框架, 当前未接线 */
     NVIC_ClearPendingIRQ(ICM_INT_IRQN);
     NVIC_SetPriority(ICM_INT_IRQN, 3);
     NVIC_EnableIRQ(ICM_INT_IRQN);
+
+    /* I2C0 控制器中断: 1kHz 异步读取必需 */
+    i2c0_enable_int();
 }
 
 int icm20602_int_is_pending(void)

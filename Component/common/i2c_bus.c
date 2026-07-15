@@ -229,3 +229,122 @@ int i2c0_read(uint8_t slave_addr,
 
     return (i == length) ? 0 : -1;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  异步中断驱动读 (高频场景, 如 1kHz IMU 读取)
+ *
+ *  机制: 启动读后立即返回, I2C 控制器在后台传输, 完成后触发 RX_DONE
+ *  中断, i2c0_irq_handler 填充数据并置 I2C0_ASYNC_RX_COMPLETE。
+ *  CPU 在传输期间可做其他事 (如姿态解算/控制), 不再阻塞轮询。
+ *
+ *  读时序沿用 i2c0_read 的 RD_ON_TXEMPTY 机制:
+ *    START | AD+W | RA | (TX空自动 Repeated-Start) | AD+R | data... | STOP
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static volatile i2c0_async_status_t g_async_status = I2C0_ASYNC_IDLE;
+static volatile uint8_t *g_async_buf = NULL;      /* 接收缓冲区 */
+static volatile uint16_t g_async_len = 0;          /* 期望读取字节数 */
+static volatile uint16_t g_async_rx_count = 0;     /* 已接收字节数 */
+
+int i2c0_read_async(uint8_t slave_addr,
+                    uint8_t reg_addr,
+                    uint8_t length,
+                    uint8_t *data)
+{
+    if (length == 0U || data == NULL) {
+        return -1;
+    }
+    if (g_async_status == I2C0_ASYNC_RX_STARTED) {
+        return -1;   /* 上一次未完成, 拒绝重入 */
+    }
+    if (i2c0_wait_idle() != 0) {
+        g_async_status = I2C0_ASYNC_ERROR;
+        return -1;
+    }
+
+    g_async_buf = data;
+    g_async_len = length;
+    g_async_rx_count = 0U;
+
+    DL_I2C_flushControllerTXFIFO(I2C_0_INST);
+    DL_I2C_flushControllerRXFIFO(I2C_0_INST);
+
+    DL_I2C_transmitControllerData(I2C_0_INST, reg_addr);
+    I2C_0_INST->MASTER.MCTR = I2C_MCTR_RD_ON_TXEMPTY_ENABLE;
+
+    DL_I2C_clearInterruptStatus(I2C_0_INST,
+        DL_I2C_INTERRUPT_CONTROLLER_RX_DONE |
+        DL_I2C_INTERRUPT_CONTROLLER_RXFIFO_TRIGGER |
+        DL_I2C_INTERRUPT_CONTROLLER_NACK |
+        DL_I2C_INTERRUPT_CONTROLLER_ARBITRATION_LOST);
+
+    /* 使能 RX_DONE + RXFIFO 触发 + 错误中断 */
+    DL_I2C_enableInterrupt(I2C_0_INST,
+        DL_I2C_INTERRUPT_CONTROLLER_RX_DONE |
+        DL_I2C_INTERRUPT_CONTROLLER_RXFIFO_TRIGGER |
+        DL_I2C_INTERRUPT_CONTROLLER_NACK |
+        DL_I2C_INTERRUPT_CONTROLLER_ARBITRATION_LOST);
+
+    g_async_status = I2C0_ASYNC_RX_STARTED;
+
+    DL_I2C_startControllerTransfer(I2C_0_INST, (uint32_t)slave_addr,
+                                   DL_I2C_CONTROLLER_DIRECTION_RX, length);
+    return 0;
+}
+
+i2c0_async_status_t i2c0_async_get_status(void)
+{
+    return g_async_status;
+}
+
+void i2c0_enable_int(void)
+{
+    NVIC_ClearPendingIRQ(I2C_0_INST_INT_IRQN);
+    NVIC_SetPriority(I2C_0_INST_INT_IRQN, 3);   /* 与编码器/MPU INT 同级 */
+    NVIC_EnableIRQ(I2C_0_INST_INT_IRQN);
+}
+
+void i2c0_irq_handler(void)
+{
+    switch (DL_I2C_getPendingInterrupt(I2C_0_INST)) {
+    case DL_I2C_IIDX_CONTROLLER_RX_DONE:
+        /* 收尾: 读走 FIFO 剩余字节, 置完成 */
+        while (!DL_I2C_isControllerRXFIFOEmpty(I2C_0_INST) &&
+               g_async_rx_count < g_async_len) {
+            g_async_buf[g_async_rx_count++] = DL_I2C_receiveControllerData(I2C_0_INST);
+        }
+        I2C_0_INST->MASTER.MCTR = 0U;
+        DL_I2C_disableInterrupt(I2C_0_INST,
+            DL_I2C_INTERRUPT_CONTROLLER_RX_DONE |
+            DL_I2C_INTERRUPT_CONTROLLER_RXFIFO_TRIGGER |
+            DL_I2C_INTERRUPT_CONTROLLER_NACK |
+            DL_I2C_INTERRUPT_CONTROLLER_ARBITRATION_LOST);
+        g_async_status = I2C0_ASYNC_RX_COMPLETE;
+        break;
+
+    case DL_I2C_IIDX_CONTROLLER_RXFIFO_TRIGGER:
+        /* RX FIFO 达到阈值 → 读走已到数据 */
+        while (!DL_I2C_isControllerRXFIFOEmpty(I2C_0_INST)) {
+            if (g_async_rx_count < g_async_len) {
+                g_async_buf[g_async_rx_count++] = DL_I2C_receiveControllerData(I2C_0_INST);
+            } else {
+                (void)DL_I2C_receiveControllerData(I2C_0_INST);
+            }
+        }
+        break;
+
+    case DL_I2C_IIDX_CONTROLLER_NACK:
+    case DL_I2C_IIDX_CONTROLLER_ARBITRATION_LOST:
+        I2C_0_INST->MASTER.MCTR = 0U;
+        DL_I2C_disableInterrupt(I2C_0_INST,
+            DL_I2C_INTERRUPT_CONTROLLER_RX_DONE |
+            DL_I2C_INTERRUPT_CONTROLLER_RXFIFO_TRIGGER |
+            DL_I2C_INTERRUPT_CONTROLLER_NACK |
+            DL_I2C_INTERRUPT_CONTROLLER_ARBITRATION_LOST);
+        g_async_status = I2C0_ASYNC_ERROR;
+        break;
+
+    default:
+        break;
+    }
+}
