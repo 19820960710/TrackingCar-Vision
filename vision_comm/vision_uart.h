@@ -25,6 +25,8 @@ typedef struct {
     uint32_t packet_count;       /**< Successfully converted observations. */
     uint32_t parse_error_count;  /**< Complete lines rejected by the parser. */
     uint32_t overrun_count;      /**< RX-ring bytes or oversized lines discarded. */
+    uint32_t tx_drop_count;      /**< Lines rejected while another TX is pending. */
+    uint32_t tx_timeout_count;   /**< Pending TX lines discarded after timeout. */
 } vision_uart_stats_t;
 
 /** @brief Bind and enable the board-selected UART. Returns false for bad config. */
@@ -51,8 +53,11 @@ bool vision_uart_take_latest_observation(vision_observation_t *out);
 /** @brief Copy counters. Main-loop API. */
 void vision_uart_get_stats(vision_uart_stats_t *out);
 
-/** @brief Send one newline-terminated diagnostic/control text line. */
-void vision_uart_send_line(const char *line);
+/** @brief Queue one newline-terminated line without waiting for hardware TX. */
+bool vision_uart_send_line(const char *line);
+
+/** @brief Advance queued TX bytes without blocking; abort a stalled line. */
+void vision_uart_service_tx(uint32_t now_ms);
 
 #ifdef __cplusplus
 }

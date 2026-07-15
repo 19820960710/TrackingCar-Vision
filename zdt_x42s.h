@@ -38,14 +38,22 @@ typedef struct {
     uint8_t address;
     uint8_t tx_frame[16];
     uint8_t tx_length;
+    uint8_t tx_index;
+    uint32_t tx_started_ms;
+    uint32_t tx_frame_queued_count;
+    uint32_t tx_frame_completed_count;
+    uint32_t tx_busy_reject_count;
+    uint32_t tx_timeout_count;
+    bool tx_timer_started;
     uint8_t response_bytes[4];
     uint8_t response_count;
     ZdtX42sResponse last_response;
 } ZdtX42s;
 
 void ZdtX42s_init(ZdtX42s *motor, UART_Regs *uart, uint8_t address);
-void ZdtX42s_setEnabled(ZdtX42s *motor, bool enabled);
-void ZdtX42s_startMoveEmm(ZdtX42s *motor, const ZdtX42sMoveEmm *move);
+bool ZdtX42s_setEnabled(ZdtX42s *motor, bool enabled);
+bool ZdtX42s_startMoveEmm(ZdtX42s *motor, const ZdtX42sMoveEmm *move);
+void ZdtX42s_serviceTx(ZdtX42s *motor, uint32_t now_ms);
 ZdtX42sResponse ZdtX42s_pollResponse(ZdtX42s *motor);
 
 #endif

@@ -50,6 +50,7 @@ SYSCONFIG_WEAK void SYSCFG_DL_init(void)
     SYSCFG_DL_GPIO_init();
     /* Module-Specific Initializations*/
     SYSCFG_DL_SYSCTL_init();
+    SYSCFG_DL_maixcam_init();
     SYSCFG_DL_stepMotor2_init();
     SYSCFG_DL_stepMotor1_init();
 }
@@ -60,11 +61,13 @@ SYSCONFIG_WEAK void SYSCFG_DL_initPower(void)
 {
     DL_GPIO_reset(GPIOA);
     DL_GPIO_reset(GPIOB);
+    DL_UART_Main_reset(maixcam_INST);
     DL_UART_Main_reset(stepMotor2_INST);
     DL_UART_Main_reset(stepMotor1_INST);
 
     DL_GPIO_enablePower(GPIOA);
     DL_GPIO_enablePower(GPIOB);
+    DL_UART_Main_enablePower(maixcam_INST);
     DL_UART_Main_enablePower(stepMotor2_INST);
     DL_UART_Main_enablePower(stepMotor1_INST);
     delay_cycles(POWER_STARTUP_DELAY);
@@ -74,16 +77,17 @@ SYSCONFIG_WEAK void SYSCFG_DL_GPIO_init(void)
 {
 
     DL_GPIO_initPeripheralOutputFunction(
+        GPIO_maixcam_IOMUX_TX, GPIO_maixcam_IOMUX_TX_FUNC);
+    DL_GPIO_initPeripheralInputFunction(
+        GPIO_maixcam_IOMUX_RX, GPIO_maixcam_IOMUX_RX_FUNC);
+    DL_GPIO_initPeripheralOutputFunction(
         GPIO_stepMotor2_IOMUX_TX, GPIO_stepMotor2_IOMUX_TX_FUNC);
     DL_GPIO_initPeripheralInputFunction(
         GPIO_stepMotor2_IOMUX_RX, GPIO_stepMotor2_IOMUX_RX_FUNC);
-    
-	DL_GPIO_initPeripheralOutputFunction(
-		 GPIO_stepMotor1_IOMUX_TX, GPIO_stepMotor1_IOMUX_TX_FUNC);
-	DL_GPIO_initPeripheralInputFunctionFeatures(
-		 GPIO_stepMotor1_IOMUX_RX, GPIO_stepMotor1_IOMUX_RX_FUNC,
-		 DL_GPIO_INVERSION_DISABLE, DL_GPIO_RESISTOR_NONE,
-		 DL_GPIO_HYSTERESIS_DISABLE, DL_GPIO_WAKEUP_DISABLE);
+    DL_GPIO_initPeripheralOutputFunction(
+        GPIO_stepMotor1_IOMUX_TX, GPIO_stepMotor1_IOMUX_TX_FUNC);
+    DL_GPIO_initPeripheralInputFunction(
+        GPIO_stepMotor1_IOMUX_RX, GPIO_stepMotor1_IOMUX_RX_FUNC);
 
     DL_GPIO_initDigitalOutput(GPIO_GRP_0_LED_1_IOMUX);
 
@@ -126,6 +130,48 @@ SYSCONFIG_WEAK void SYSCFG_DL_SYSCTL_init(void)
 }
 
 
+static const DL_UART_Main_ClockConfig gmaixcamClockConfig = {
+    .clockSel    = DL_UART_MAIN_CLOCK_MFCLK,
+    .divideRatio = DL_UART_MAIN_CLOCK_DIVIDE_RATIO_1
+};
+
+static const DL_UART_Main_Config gmaixcamConfig = {
+    .mode        = DL_UART_MAIN_MODE_NORMAL,
+    .direction   = DL_UART_MAIN_DIRECTION_TX_RX,
+    .flowControl = DL_UART_MAIN_FLOW_CONTROL_NONE,
+    .parity      = DL_UART_MAIN_PARITY_NONE,
+    .wordLength  = DL_UART_MAIN_WORD_LENGTH_8_BITS,
+    .stopBits    = DL_UART_MAIN_STOP_BITS_ONE
+};
+
+SYSCONFIG_WEAK void SYSCFG_DL_maixcam_init(void)
+{
+    DL_UART_Main_setClockConfig(maixcam_INST, (DL_UART_Main_ClockConfig *) &gmaixcamClockConfig);
+
+    DL_UART_Main_init(maixcam_INST, (DL_UART_Main_Config *) &gmaixcamConfig);
+    /*
+     * Configure baud rate by setting oversampling and baud rate divisors.
+     *  Target baud rate: 115200
+     *  Actual baud rate: 115107.91
+     */
+    DL_UART_Main_setOversampling(maixcam_INST, DL_UART_OVERSAMPLING_RATE_16X);
+    DL_UART_Main_setBaudRateDivisor(maixcam_INST, maixcam_IBRD_4_MHZ_115200_BAUD, maixcam_FBRD_4_MHZ_115200_BAUD);
+
+
+    /* Configure Interrupts */
+    DL_UART_Main_enableInterrupt(maixcam_INST,
+                                 DL_UART_MAIN_INTERRUPT_RX |
+                                 DL_UART_MAIN_INTERRUPT_RX_TIMEOUT_ERROR);
+
+    /* Configure FIFOs */
+    DL_UART_Main_enableFIFOs(maixcam_INST);
+    DL_UART_Main_setRXFIFOThreshold(maixcam_INST, DL_UART_RX_FIFO_LEVEL_1_2_FULL);
+    DL_UART_Main_setTXFIFOThreshold(maixcam_INST, DL_UART_TX_FIFO_LEVEL_1_2_EMPTY);
+
+    DL_UART_Main_setRXInterruptTimeout(maixcam_INST, 15);
+
+    DL_UART_Main_enable(maixcam_INST);
+}
 static const DL_UART_Main_ClockConfig gstepMotor2ClockConfig = {
     .clockSel    = DL_UART_MAIN_CLOCK_MFCLK,
     .divideRatio = DL_UART_MAIN_CLOCK_DIVIDE_RATIO_1

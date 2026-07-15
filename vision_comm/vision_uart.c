@@ -6,6 +6,8 @@
 #include <stddef.h>
 #include <string.h>
 
+#define VISION_UART_TX_TIMEOUT_MS (20U)
+
 static volatile uint8_t g_rx_ring[VISION_UART_RX_RING_CAPACITY];
 static volatile uint16_t g_rx_head;
 static volatile uint16_t g_rx_tail;
@@ -20,6 +22,11 @@ static vision_observation_t g_latest_observation;
 static vision_uart_stats_t g_stats;
 static bool g_observation_ready;
 static uint32_t g_next_sequence;
+static uint8_t g_tx_line[VISION_UART_LINE_MAX];
+static uint8_t g_tx_length;
+static uint8_t g_tx_index;
+static uint32_t g_tx_started_ms;
+static bool g_tx_timer_started;
 
 static void restore_interrupt_state(uint32_t primask)
 {
@@ -142,6 +149,14 @@ bool vision_uart_init(const vision_uart_config_t *config)
         return false;
     }
 
+    NVIC_DisableIRQ(config->irqn);
+    DL_UART_Main_disableInterrupt(config->instance,
+                                  DL_UART_MAIN_INTERRUPT_RX |
+                                  DL_UART_MAIN_INTERRUPT_RX_TIMEOUT_ERROR);
+    while (!DL_UART_Main_isRXFIFOEmpty(config->instance)) {
+        (void) DL_UART_Main_receiveData(config->instance);
+    }
+
     g_config = *config;
     g_rx_head = 0U;
     g_rx_tail = 0U;
@@ -150,9 +165,16 @@ bool vision_uart_init(const vision_uart_config_t *config)
     g_discard_until_newline = false;
     g_observation_ready = false;
     g_next_sequence = 0U;
+    g_tx_length = 0U;
+    g_tx_index = 0U;
+    g_tx_started_ms = 0U;
+    g_tx_timer_started = false;
     memset(&g_latest_observation, 0, sizeof(g_latest_observation));
     memset(&g_stats, 0, sizeof(g_stats));
 
+    DL_UART_Main_enableInterrupt(g_config.instance,
+                                 DL_UART_MAIN_INTERRUPT_RX |
+                                 DL_UART_MAIN_INTERRUPT_RX_TIMEOUT_ERROR);
     NVIC_ClearPendingIRQ(g_config.irqn);
     NVIC_EnableIRQ(g_config.irqn);
     return true;
@@ -215,15 +237,63 @@ void vision_uart_get_stats(vision_uart_stats_t *out)
     }
 }
 
-void vision_uart_send_line(const char *line)
+bool vision_uart_send_line(const char *line)
 {
+    uint8_t length = 0U;
+
     if ((line == NULL) || (g_config.instance == NULL)) {
+        return false;
+    }
+
+    if (g_tx_length != 0U) {
+        g_stats.tx_drop_count++;
+        return false;
+    }
+
+    while ((line[length] != '\0') &&
+           (length < (VISION_UART_LINE_MAX - 1U))) {
+        g_tx_line[length] = (uint8_t) line[length];
+        length++;
+    }
+    if (line[length] != '\0') {
+        g_stats.tx_drop_count++;
+        return false;
+    }
+
+    g_tx_line[length] = (uint8_t) '\n';
+    g_tx_length = length + 1U;
+    g_tx_index = 0U;
+    g_tx_timer_started = false;
+    return true;
+}
+
+void vision_uart_service_tx(uint32_t now_ms)
+{
+    if ((g_config.instance == NULL) || (g_tx_length == 0U)) {
         return;
     }
 
-    while (*line != '\0') {
-        DL_UART_Main_transmitDataBlocking(g_config.instance, (uint8_t) *line);
-        line++;
+    if (!g_tx_timer_started) {
+        g_tx_started_ms = now_ms;
+        g_tx_timer_started = true;
+    } else if ((uint32_t) (now_ms - g_tx_started_ms) >=
+               VISION_UART_TX_TIMEOUT_MS) {
+        g_tx_length = 0U;
+        g_tx_index = 0U;
+        g_tx_timer_started = false;
+        g_stats.tx_timeout_count++;
+        return;
     }
-    DL_UART_Main_transmitDataBlocking(g_config.instance, (uint8_t) '\n');
+
+    while ((g_tx_index < g_tx_length) &&
+           !DL_UART_Main_isTXFIFOFull(g_config.instance)) {
+        DL_UART_Main_transmitData(g_config.instance, g_tx_line[g_tx_index]);
+        g_tx_index++;
+    }
+
+    if (g_tx_index >= g_tx_length) {
+        g_tx_length = 0U;
+        g_tx_index = 0U;
+        g_tx_timer_started = false;
+    }
 }

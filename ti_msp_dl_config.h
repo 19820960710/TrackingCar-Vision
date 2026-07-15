@@ -78,35 +78,51 @@ extern "C" {
 
 
 
+/* Defines for maixcam */
+#define maixcam_INST                                                       UART0
+#define maixcam_INST_FREQUENCY                                           4000000
+#define maixcam_INST_IRQHandler                                 UART0_IRQHandler
+#define maixcam_INST_INT_IRQN                                     UART0_INT_IRQn
+#define GPIO_maixcam_RX_PORT                                               GPIOA
+#define GPIO_maixcam_TX_PORT                                               GPIOA
+#define GPIO_maixcam_RX_PIN                                        DL_GPIO_PIN_1
+#define GPIO_maixcam_TX_PIN                                        DL_GPIO_PIN_0
+#define GPIO_maixcam_IOMUX_RX                                     (IOMUX_PINCM2)
+#define GPIO_maixcam_IOMUX_TX                                     (IOMUX_PINCM1)
+#define GPIO_maixcam_IOMUX_RX_FUNC                      IOMUX_PINCM2_PF_UART0_RX
+#define GPIO_maixcam_IOMUX_TX_FUNC                      IOMUX_PINCM1_PF_UART0_TX
+#define maixcam_BAUD_RATE                                               (115200)
+#define maixcam_IBRD_4_MHZ_115200_BAUD                                       (2)
+#define maixcam_FBRD_4_MHZ_115200_BAUD                                      (11)
 /* Defines for stepMotor2 */
-#define stepMotor2_INST                                                    UART1
+#define stepMotor2_INST                                                    UART2
 #define stepMotor2_INST_FREQUENCY                                        4000000
-#define stepMotor2_INST_IRQHandler                              UART1_IRQHandler
-#define stepMotor2_INST_INT_IRQN                                  UART1_INT_IRQn
-#define GPIO_stepMotor2_RX_PORT                                            GPIOB
-#define GPIO_stepMotor2_TX_PORT                                            GPIOB
-#define GPIO_stepMotor2_RX_PIN                                     DL_GPIO_PIN_7
-#define GPIO_stepMotor2_TX_PIN                                     DL_GPIO_PIN_6
-#define GPIO_stepMotor2_IOMUX_RX                                 (IOMUX_PINCM24)
-#define GPIO_stepMotor2_IOMUX_TX                                 (IOMUX_PINCM23)
-#define GPIO_stepMotor2_IOMUX_RX_FUNC                  IOMUX_PINCM24_PF_UART1_RX
-#define GPIO_stepMotor2_IOMUX_TX_FUNC                  IOMUX_PINCM23_PF_UART1_TX
+#define stepMotor2_INST_IRQHandler                              UART2_IRQHandler
+#define stepMotor2_INST_INT_IRQN                                  UART2_INT_IRQn
+#define GPIO_stepMotor2_RX_PORT                                            GPIOA
+#define GPIO_stepMotor2_TX_PORT                                            GPIOA
+#define GPIO_stepMotor2_RX_PIN                                    DL_GPIO_PIN_24
+#define GPIO_stepMotor2_TX_PIN                                    DL_GPIO_PIN_23
+#define GPIO_stepMotor2_IOMUX_RX                                 (IOMUX_PINCM54)
+#define GPIO_stepMotor2_IOMUX_TX                                 (IOMUX_PINCM53)
+#define GPIO_stepMotor2_IOMUX_RX_FUNC                  IOMUX_PINCM54_PF_UART2_RX
+#define GPIO_stepMotor2_IOMUX_TX_FUNC                  IOMUX_PINCM53_PF_UART2_TX
 #define stepMotor2_BAUD_RATE                                            (115200)
 #define stepMotor2_IBRD_4_MHZ_115200_BAUD                                    (2)
 #define stepMotor2_FBRD_4_MHZ_115200_BAUD                                   (11)
 /* Defines for stepMotor1 */
-#define stepMotor1_INST                                                    UART2
+#define stepMotor1_INST                                                    UART1
 #define stepMotor1_INST_FREQUENCY                                        4000000
-#define stepMotor1_INST_IRQHandler                              UART2_IRQHandler
-#define stepMotor1_INST_INT_IRQN                                  UART2_INT_IRQn
-#define GPIO_stepMotor1_RX_PORT                                            GPIOA
-#define GPIO_stepMotor1_TX_PORT                                            GPIOA
-#define GPIO_stepMotor1_RX_PIN                                    DL_GPIO_PIN_24
-#define GPIO_stepMotor1_TX_PIN                                    DL_GPIO_PIN_23
-#define GPIO_stepMotor1_IOMUX_RX                                 (IOMUX_PINCM54)
-#define GPIO_stepMotor1_IOMUX_TX                                 (IOMUX_PINCM53)
-#define GPIO_stepMotor1_IOMUX_RX_FUNC                  IOMUX_PINCM54_PF_UART2_RX
-#define GPIO_stepMotor1_IOMUX_TX_FUNC                  IOMUX_PINCM53_PF_UART2_TX
+#define stepMotor1_INST_IRQHandler                              UART1_IRQHandler
+#define stepMotor1_INST_INT_IRQN                                  UART1_INT_IRQn
+#define GPIO_stepMotor1_RX_PORT                                            GPIOB
+#define GPIO_stepMotor1_TX_PORT                                            GPIOB
+#define GPIO_stepMotor1_RX_PIN                                     DL_GPIO_PIN_7
+#define GPIO_stepMotor1_TX_PIN                                     DL_GPIO_PIN_6
+#define GPIO_stepMotor1_IOMUX_RX                                 (IOMUX_PINCM24)
+#define GPIO_stepMotor1_IOMUX_TX                                 (IOMUX_PINCM23)
+#define GPIO_stepMotor1_IOMUX_RX_FUNC                  IOMUX_PINCM24_PF_UART1_RX
+#define GPIO_stepMotor1_IOMUX_TX_FUNC                  IOMUX_PINCM23_PF_UART1_TX
 #define stepMotor1_BAUD_RATE                                            (115200)
 #define stepMotor1_IBRD_4_MHZ_115200_BAUD                                    (2)
 #define stepMotor1_FBRD_4_MHZ_115200_BAUD                                   (11)
@@ -128,6 +144,7 @@ void SYSCFG_DL_init(void);
 void SYSCFG_DL_initPower(void);
 void SYSCFG_DL_GPIO_init(void);
 void SYSCFG_DL_SYSCTL_init(void);
+void SYSCFG_DL_maixcam_init(void);
 void SYSCFG_DL_stepMotor2_init(void);
 void SYSCFG_DL_stepMotor1_init(void);
 

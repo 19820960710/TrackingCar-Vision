@@ -7,22 +7,20 @@
 #define ZDT_X42S_RESPONSE_REACHED_CODE    (0x9FU)
 #define ZDT_X42S_RESPONSE_ERROR_A          (0xE2U)
 #define ZDT_X42S_RESPONSE_ERROR_B          (0xEEU)
+#define ZDT_X42S_TX_TIMEOUT_MS              (20U)
 
-static void ZdtX42s_sendByte(const ZdtX42s *motor, uint8_t byte)
+static bool ZdtX42s_beginFrame(ZdtX42s *motor, uint8_t length)
 {
-    while (DL_UART_Main_isTXFIFOFull(motor->uart)) {
+    if ((motor->uart == NULL) || (motor->tx_length != 0U) ||
+        (length == 0U) || (length > sizeof(motor->tx_frame))) {
+        return false;
     }
 
-    DL_UART_Main_transmitData(motor->uart, byte);
-}
-
-static void ZdtX42s_sendFrame(const ZdtX42s *motor, const uint8_t *frame, uint8_t length)
-{
-    uint8_t index;
-
-    for (index = 0U; index < length; ++index) {
-        ZdtX42s_sendByte(motor, frame[index]);
-    }
+    motor->tx_length = length;
+    motor->tx_index = 0U;
+    motor->tx_timer_started = false;
+    motor->tx_frame_queued_count++;
+    return true;
 }
 
 void ZdtX42s_init(ZdtX42s *motor, UART_Regs *uart, uint8_t address)
@@ -30,24 +28,46 @@ void ZdtX42s_init(ZdtX42s *motor, UART_Regs *uart, uint8_t address)
     motor->uart = uart;
     motor->address = address;
     motor->tx_length = 0U;
+    motor->tx_index = 0U;
+    motor->tx_started_ms = 0U;
+    motor->tx_frame_queued_count = 0U;
+    motor->tx_frame_completed_count = 0U;
+    motor->tx_busy_reject_count = 0U;
+    motor->tx_timeout_count = 0U;
+    motor->tx_timer_started = false;
     motor->response_count = 0U;
     motor->last_response = ZDT_X42S_RESPONSE_NONE;
 }
 
-void ZdtX42s_setEnabled(ZdtX42s *motor, bool enabled)
+bool ZdtX42s_setEnabled(ZdtX42s *motor, bool enabled)
 {
+    if (motor == NULL) {
+        return false;
+    }
+    if (motor->tx_length != 0U) {
+        motor->tx_busy_reject_count++;
+        return false;
+    }
+
     motor->tx_frame[0] = motor->address;
     motor->tx_frame[1] = ZDT_X42S_CMD_ENABLE;
     motor->tx_frame[2] = 0xABU;
     motor->tx_frame[3] = enabled ? 0x01U : 0x00U;
     motor->tx_frame[4] = 0x00U;
     motor->tx_frame[5] = ZDT_X42S_FRAME_SUFFIX;
-    motor->tx_length = 6U;
-    ZdtX42s_sendFrame(motor, motor->tx_frame, motor->tx_length);
+    return ZdtX42s_beginFrame(motor, 6U);
 }
 
-void ZdtX42s_startMoveEmm(ZdtX42s *motor, const ZdtX42sMoveEmm *move)
+bool ZdtX42s_startMoveEmm(ZdtX42s *motor, const ZdtX42sMoveEmm *move)
 {
+    if ((motor == NULL) || (move == NULL)) {
+        return false;
+    }
+    if (motor->tx_length != 0U) {
+        motor->tx_busy_reject_count++;
+        return false;
+    }
+
     motor->tx_frame[0] = motor->address;
     motor->tx_frame[1] = ZDT_X42S_CMD_POSITION_TRAPEZOID;
     motor->tx_frame[2] = (uint8_t) move->direction;
@@ -61,8 +81,41 @@ void ZdtX42s_startMoveEmm(ZdtX42s *motor, const ZdtX42sMoveEmm *move)
     motor->tx_frame[10] = move->motion_mode;
     motor->tx_frame[11] = move->sync_flag;
     motor->tx_frame[12] = ZDT_X42S_FRAME_SUFFIX;
-    motor->tx_length = 13U;
-    ZdtX42s_sendFrame(motor, motor->tx_frame, motor->tx_length);
+    return ZdtX42s_beginFrame(motor, 13U);
+}
+
+void ZdtX42s_serviceTx(ZdtX42s *motor, uint32_t now_ms)
+{
+    if ((motor == NULL) || (motor->uart == NULL) ||
+        (motor->tx_length == 0U)) {
+        return;
+    }
+
+    if (!motor->tx_timer_started) {
+        motor->tx_started_ms = now_ms;
+        motor->tx_timer_started = true;
+    } else if ((uint32_t) (now_ms - motor->tx_started_ms) >=
+               ZDT_X42S_TX_TIMEOUT_MS) {
+        motor->tx_length = 0U;
+        motor->tx_index = 0U;
+        motor->tx_timer_started = false;
+        motor->tx_timeout_count++;
+        return;
+    }
+
+    while ((motor->tx_index < motor->tx_length) &&
+           !DL_UART_Main_isTXFIFOFull(motor->uart)) {
+        DL_UART_Main_transmitData(motor->uart,
+                                 motor->tx_frame[motor->tx_index]);
+        motor->tx_index++;
+    }
+
+    if (motor->tx_index >= motor->tx_length) {
+        motor->tx_length = 0U;
+        motor->tx_index = 0U;
+        motor->tx_timer_started = false;
+        motor->tx_frame_completed_count++;
+    }
 }
 
 ZdtX42sResponse ZdtX42s_pollResponse(ZdtX42s *motor)

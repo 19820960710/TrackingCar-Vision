@@ -1,0 +1,20 @@
+# C/C++ compiler outputs
+*.o
+*.obj
+*.d
+*.dep
+
+# Keil generated outputs and per-user UI state
+keil/Objects/
+keil/Listings/
+keil/*.map
+keil/*.uvguix.*
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Runtime serial captures. Keep summary JSON and curated test vectors.
+tools/test_logs/**/*.log
+tools/test_logs/**/*.csv
+tools/test_logs/*.log

@@ -1,0 +1,200 @@
+{
+  "status": "complete",
+  "error": "",
+  "port": "COM11",
+  "baud": 115200,
+  "fps": 100.0,
+  "cycles": 1,
+  "mode": "trajectory",
+  "pre_send_delay_s": 0.0,
+  "frame_bytes": 45,
+  "wire_time_ms": 3.90625,
+  "trajectory": {
+    "duration_s": 16.0,
+    "period_s": 8.0,
+    "yaw_amplitude_pixels": 120,
+    "pitch_amplitude_pixels": 70,
+    "ramp_s": 1.0,
+    "sample_count": 1600
+  },
+  "vision_ready": true,
+  "tv_line_count": 1692,
+  "ms_line_count": 207,
+  "unknown_line_count": 0,
+  "protocol_error_observed": false,
+  "final_motor_counters": {
+    "Y": {
+      "Q": 80,
+      "J": 0,
+      "F": 81,
+      "T": 0,
+      "A": 81,
+      "R": 0,
+      "P": 0,
+      "E": 0
+    },
+    "P": {
+      "Q": 80,
+      "J": 0,
+      "F": 81,
+      "T": 0,
+      "A": 81,
+      "R": 0,
+      "P": 0,
+      "E": 0
+    }
+  },
+  "scenarios": [
+    {
+      "cycle": 1,
+      "name": "CONTINUOUS_ELLIPSE",
+      "duration_s": 16.0,
+      "sample_count": 1600,
+      "tv_lines": 1591,
+      "pitch_submit_count": 78,
+      "yaw_submit_count": 78,
+      "counter_start": {
+        "Y": {
+          "Q": 2,
+          "J": 0,
+          "F": 3,
+          "T": 0,
+          "A": 3,
+          "R": 0,
+          "P": 0,
+          "E": 0
+        },
+        "P": {
+          "Q": 2,
+          "J": 0,
+          "F": 3,
+          "T": 0,
+          "A": 3,
+          "R": 0,
+          "P": 0,
+          "E": 0
+        }
+      },
+      "counter_end": {
+        "Y": {
+          "Q": 80,
+          "J": 0,
+          "F": 81,
+          "T": 0,
+          "A": 81,
+          "R": 0,
+          "P": 0,
+          "E": 0
+        },
+        "P": {
+          "Q": 78,
+          "J": 0,
+          "F": 79,
+          "T": 0,
+          "A": 79,
+          "R": 0,
+          "P": 0,
+          "E": 0
+        }
+      },
+      "counter_delta": {
+        "P": {
+          "Q": 76,
+          "J": 0,
+          "F": 76,
+          "T": 0,
+          "A": 76,
+          "R": 0,
+          "P": 0,
+          "E": 0
+        },
+        "Y": {
+          "Q": 78,
+          "J": 0,
+          "F": 78,
+          "T": 0,
+          "A": 78,
+          "R": 0,
+          "P": 0,
+          "E": 0
+        }
+      }
+    },
+    {
+      "cycle": 1,
+      "name": "FINAL_CENTER",
+      "dx": 0,
+      "dy": 0,
+      "duration_s": 1.0,
+      "tv_lines": 101,
+      "pitch_submit_count": 0,
+      "yaw_submit_count": 0,
+      "counter_start": {
+        "Y": {
+          "Q": 80,
+          "J": 0,
+          "F": 81,
+          "T": 0,
+          "A": 81,
+          "R": 0,
+          "P": 0,
+          "E": 0
+        },
+        "P": {
+          "Q": 78,
+          "J": 0,
+          "F": 79,
+          "T": 0,
+          "A": 79,
+          "R": 0,
+          "P": 0,
+          "E": 0
+        }
+      },
+      "counter_end": {
+        "Y": {
+          "Q": 80,
+          "J": 0,
+          "F": 81,
+          "T": 0,
+          "A": 81,
+          "R": 0,
+          "P": 0,
+          "E": 0
+        },
+        "P": {
+          "Q": 80,
+          "J": 0,
+          "F": 81,
+          "T": 0,
+          "A": 81,
+          "R": 0,
+          "P": 0,
+          "E": 0
+        }
+      },
+      "counter_delta": {
+        "P": {
+          "Q": 2,
+          "J": 0,
+          "F": 2,
+          "T": 0,
+          "A": 2,
+          "R": 0,
+          "P": 0,
+          "E": 0
+        },
+        "Y": {
+          "Q": 0,
+          "J": 0,
+          "F": 0,
+          "T": 0,
+          "A": 0,
+          "R": 0,
+          "P": 0,
+          "E": 0
+        }
+      }
+    }
+  ]
+}

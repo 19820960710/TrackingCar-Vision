@@ -5,13 +5,12 @@ void StepperMotor_init(StepperMotor *motor, UART_Regs *uart, uint8_t address)
     ZdtX42s_init(&motor->protocol, uart, address);
 }
 
-void StepperMotor_enable(StepperMotor *motor)
+bool StepperMotor_enable(StepperMotor *motor)
 {
-    ZdtX42s_setEnabled(&motor->protocol, true);
-    delay_cycles(100000U);
+    return ZdtX42s_setEnabled(&motor->protocol, true);
 }
 
-void StepperMotor_move(StepperMotor *motor, const StepperMotorMove *move)
+bool StepperMotor_move(StepperMotor *motor, const StepperMotorMove *move)
 {
     const ZdtX42sMoveEmm command = {
         .direction = move->direction,
@@ -22,7 +21,12 @@ void StepperMotor_move(StepperMotor *motor, const StepperMotorMove *move)
         .sync_flag = move->sync_flag
     };
 
-    ZdtX42s_startMoveEmm(&motor->protocol, &command);
+    return ZdtX42s_startMoveEmm(&motor->protocol, &command);
+}
+
+void StepperMotor_serviceTx(StepperMotor *motor, uint32_t now_ms)
+{
+    ZdtX42s_serviceTx(&motor->protocol, now_ms);
 }
 
 StepperMotorResponse StepperMotor_poll(StepperMotor *motor)
