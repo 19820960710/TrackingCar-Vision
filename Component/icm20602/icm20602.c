@@ -22,7 +22,8 @@
  *     3) PI 补偿陀螺仪 → 四元数积分 → 归一化
  *     4) 四元数 → pitch/roll/yaw (°)
  *   动态 Kp/Ki: 检测到剧烈运动 (|a|>1.2g) 时增大增益, 加快收敛。
- *   yaw 无磁力计绝对参考, 含静止锁定 + 手动漂移补偿 (0.00003f)。
+ *   yaw 无磁力计绝对参考, 含静止锁定 + 运行时 Z 轴零偏追踪 (静止 3s
+ *   自动重新校准零偏, 对抗温度漂移)。
  */
 
 #include "ti_msp_dl_config.h"
@@ -132,7 +133,7 @@ static float m_integralFBx = 0.0f, m_integralFBy = 0.0f, m_integralFBz = 0.0f;
 static float m_locked_yaw = 0.0f;
 static int8_t m_yaw_locked = 0;
 static float m_last_gz = 0.0f;
-static uint8_t m_stable_count = 0;
+static uint16_t m_stable_count = 0;   /* 静止稳定计数 (uint16_t, 封顶避免溢出) */
 
 /** @brief 采样周期默认值 (s). 100Hz → 0.01s. 首次调用或时间戳异常时使用 */
 #define MAHONY_DT_DEFAULT  0.01f
@@ -214,12 +215,14 @@ static void icm_register_init(void)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 /**
- * @brief 静止时采样 100 次 Z 轴陀螺, 取均值作为零点
- * @note  采样间隔 10ms, 总耗时约 1s。需保持模块静止。
+ * @brief 静止时采样 256 次 Z 轴陀螺, 取均值作为零点
+ * @note  采样间隔 10ms, 总耗时约 2.5s。需保持模块静止。
+ *        256 次 (原 100) 提高初始零偏精度, 减小残余漂移。
+ *        运行时静止 3s 后还会自动追踪零偏 (见 icm_mahony_update)。
  */
 static void icm_soft_calibrate_z(void)
 {
-    uint16_t const calibration_samples = 100;
+    uint16_t const calibration_samples = 256;
     float gz_sum = 0.0f;
 
     for (uint16_t i = 0; i < calibration_samples; i++) {
@@ -308,24 +311,42 @@ static int icm_mahony_update(icm_attitude_t *out)
         }
     }
 
-    /* ── yaw 静止锁定: Z 角速度连续稳定 → 锁定 yaw 防漂 ── */
+    /* ── yaw 静止锁定 + 运行时 Z 轴零偏追踪 ──
+     * 纯陀螺 yaw 无磁力计绝对参考, Z 轴零漂必然累积。init 软校准只做一次,
+     * 温度变化/长期运行后零偏会偏移。这里在静止判据下自动追踪零偏:
+     *   - 200ms 连续稳定 → 锁定 yaw (抑制静止漂移)
+     *   - 3s 连续稳定 → 一阶低通缓慢更新 gyro_zero_z (对抗温度漂移)
+     * 判据严格 (gz 连续几乎不变), 避免吃掉真实缓慢转动。 */
     {
-        const float GYRO_THRESHOLD = 0.002f;
-        const uint8_t STABLE_SAMPLES = 20;
+        const float GYRO_THRESHOLD = 0.002f;       /* gz 变化阈值 (rad/s) */
+        const uint16_t STABLE_SAMPLES = 20;         /* 200ms 稳定 → 锁定 yaw */
+        const uint16_t CAL_STABLE_SAMPLES = 300;    /* 3s 稳定 → 追踪零偏 */
+        const float ZERO_TRACK_ALPHA = 0.002f;      /* 一阶低通系数 (缓慢融合) */
 
         if (fabsf(gz - m_last_gz) < GYRO_THRESHOLD) {
-            m_stable_count++;
+            if (m_stable_count < 1000U) {           /* 封顶避免溢出 */
+                m_stable_count++;
+            }
         } else {
             m_stable_count = 0;
             m_yaw_locked = 0;
         }
         m_last_gz = gz;
 
+        /* 200ms 稳定 → 锁定 yaw 防静止漂移 */
         if (m_stable_count >= STABLE_SAMPLES && m_yaw_locked == 0) {
             m_yaw_locked = 1;
             m_locked_yaw = atan2f(2.0f * (q_w * q_z + q_x * q_y),
                                   1.0f - 2.0f * (q_y * q_y + q_z * q_z))
                            * 57.29578f;
+        }
+
+        /* 3s 连续稳定 → 运行时追踪 Z 轴零偏
+         * 用原始 gyr_z (LSB) 更新 gyro_zero_z, 缓慢一阶低通融合。
+         * 持续静止时每帧都微调, 对抗温度漂移; 一旦运动 m_stable_count 清零。 */
+        if (m_stable_count >= CAL_STABLE_SAMPLES) {
+            gyro_zero_z = gyro_zero_z * (1.0f - ZERO_TRACK_ALPHA)
+                          + (float)gyr_z * ZERO_TRACK_ALPHA;
         }
     }
 
@@ -386,9 +407,8 @@ static int icm_mahony_update(icm_attitude_t *out)
     }
 
     /* ── 四元数积分 ──
-     * 旧版末项 +0.00003f 为 yaw 零漂手动补偿 (板级相关, 未实测),
-     * 实测会累积误差导致旋转两圈后回不到 0°, 已移除。
-     * 如需补偿 Z 轴零漂, 应通过 icm_soft_calibrate_z() 软校准实现。 */
+     * Z 轴零漂由 icm_soft_calibrate_z (init 256 次均值) + 运行时静止追踪
+     * (3s 稳定后一阶低通更新 gyro_zero_z) 双重抑制, 不再需要手动补偿值。 */
     q_w += qDot1 * dt;
     q_x += qDot2 * dt;
     q_y += qDot3 * dt;
