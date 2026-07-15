@@ -317,12 +317,12 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
      * 判据严格 (gz 连续几乎不变), 避免吃掉真实缓慢转动。 */
     {
         const float GYRO_THRESHOLD = 0.002f;       /* gz 变化阈值 (rad/s) */
-        const uint16_t STABLE_SAMPLES = 20;         /* 200ms 稳定 → 锁定 yaw */
-        const uint16_t CAL_STABLE_SAMPLES = 300;    /* 3s 稳定 → 追踪零偏 */
+        const uint16_t STABLE_SAMPLES = 200;        /* 200ms 稳定 @1kHz → 锁定 yaw */
+        const uint16_t CAL_STABLE_SAMPLES = 3000;   /* 3s 稳定 @1kHz → 追踪零偏 */
         const float ZERO_TRACK_ALPHA = 0.002f;      /* 一阶低通系数 (缓慢融合) */
 
         if (fabsf(gz - m_last_gz) < GYRO_THRESHOLD) {
-            if (m_stable_count < 1000U) {           /* 封顶避免溢出 */
+            if (m_stable_count < 60000U) {          /* 封顶避免溢出 (uint16_t) */
                 m_stable_count++;
             }
         } else {
