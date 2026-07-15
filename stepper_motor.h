@@ -22,6 +22,7 @@ typedef struct {
 void StepperMotor_init(StepperMotor *motor, UART_Regs *uart, uint8_t address);
 bool StepperMotor_enable(StepperMotor *motor);
 bool StepperMotor_move(StepperMotor *motor, const StepperMotorMove *move);
+bool StepperMotor_stop(StepperMotor *motor);
 void StepperMotor_serviceTx(StepperMotor *motor, uint32_t now_ms);
 StepperMotorResponse StepperMotor_poll(StepperMotor *motor);
 

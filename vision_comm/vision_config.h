@@ -4,8 +4,8 @@
 /* MaixCAM UART text protocol and image defaults. */
 #define VISION_UART_LINE_MAX                 (96U)
 #define VISION_UART_RX_RING_CAPACITY         (256U)
-#define VISION_DEFAULT_FRAME_WIDTH           (512U)
-#define VISION_DEFAULT_FRAME_HEIGHT          (320U)
+#define VISION_DEFAULT_FRAME_WIDTH           (320U)
+#define VISION_DEFAULT_FRAME_HEIGHT          (240U)
 
 #define VISION_AIM_PREFIX                    "AIM,"
 #define VISION_AIM_PREFIX_LEN                (4U)

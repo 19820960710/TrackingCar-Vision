@@ -53,6 +53,7 @@ typedef struct {
 void ZdtX42s_init(ZdtX42s *motor, UART_Regs *uart, uint8_t address);
 bool ZdtX42s_setEnabled(ZdtX42s *motor, bool enabled);
 bool ZdtX42s_startMoveEmm(ZdtX42s *motor, const ZdtX42sMoveEmm *move);
+bool ZdtX42s_stopNow(ZdtX42s *motor);
 void ZdtX42s_serviceTx(ZdtX42s *motor, uint32_t now_ms);
 ZdtX42sResponse ZdtX42s_pollResponse(ZdtX42s *motor);
 

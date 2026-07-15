@@ -3,6 +3,8 @@
 #define ZDT_X42S_FRAME_SUFFIX             (0x6BU)
 #define ZDT_X42S_CMD_ENABLE               (0xF3U)
 #define ZDT_X42S_CMD_POSITION_TRAPEZOID   (0xFDU)
+#define ZDT_X42S_CMD_STOP_NOW             (0xFEU)
+#define ZDT_X42S_STOP_NOW_AUXILIARY       (0x98U)
 #define ZDT_X42S_RESPONSE_ACCEPTED_CODE   (0x02U)
 #define ZDT_X42S_RESPONSE_REACHED_CODE    (0x9FU)
 #define ZDT_X42S_RESPONSE_ERROR_A          (0xE2U)
@@ -25,6 +27,10 @@ static bool ZdtX42s_beginFrame(ZdtX42s *motor, uint8_t length)
 
 void ZdtX42s_init(ZdtX42s *motor, UART_Regs *uart, uint8_t address)
 {
+    if (motor == NULL) {
+        return;
+    }
+
     motor->uart = uart;
     motor->address = address;
     motor->tx_length = 0U;
@@ -41,7 +47,8 @@ void ZdtX42s_init(ZdtX42s *motor, UART_Regs *uart, uint8_t address)
 
 bool ZdtX42s_setEnabled(ZdtX42s *motor, bool enabled)
 {
-    if (motor == NULL) {
+    if ((motor == NULL) || (motor->uart == NULL) ||
+        (motor->address == 0U)) {
         return false;
     }
     if (motor->tx_length != 0U) {
@@ -60,7 +67,8 @@ bool ZdtX42s_setEnabled(ZdtX42s *motor, bool enabled)
 
 bool ZdtX42s_startMoveEmm(ZdtX42s *motor, const ZdtX42sMoveEmm *move)
 {
-    if ((motor == NULL) || (move == NULL)) {
+    if ((motor == NULL) || (move == NULL) || (motor->uart == NULL) ||
+        (motor->address == 0U)) {
         return false;
     }
     if (motor->tx_length != 0U) {
@@ -82,6 +90,25 @@ bool ZdtX42s_startMoveEmm(ZdtX42s *motor, const ZdtX42sMoveEmm *move)
     motor->tx_frame[11] = move->sync_flag;
     motor->tx_frame[12] = ZDT_X42S_FRAME_SUFFIX;
     return ZdtX42s_beginFrame(motor, 13U);
+}
+
+bool ZdtX42s_stopNow(ZdtX42s *motor)
+{
+    if ((motor == NULL) || (motor->uart == NULL) ||
+        (motor->address == 0U)) {
+        return false;
+    }
+    if (motor->tx_length != 0U) {
+        motor->tx_busy_reject_count++;
+        return false;
+    }
+
+    motor->tx_frame[0] = motor->address;
+    motor->tx_frame[1] = ZDT_X42S_CMD_STOP_NOW;
+    motor->tx_frame[2] = ZDT_X42S_STOP_NOW_AUXILIARY;
+    motor->tx_frame[3] = 0x00U;
+    motor->tx_frame[4] = ZDT_X42S_FRAME_SUFFIX;
+    return ZdtX42s_beginFrame(motor, 5U);
 }
 
 void ZdtX42s_serviceTx(ZdtX42s *motor, uint32_t now_ms)

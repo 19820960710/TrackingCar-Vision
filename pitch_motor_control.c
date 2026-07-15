@@ -5,7 +5,10 @@
 #define PITCH_MOTOR_MAX_SPEED_RPM        (3000U)
 #define PITCH_MOTOR_REALTIME_RELATIVE    (2U)
 #define PITCH_MOTOR_EXECUTE_IMMEDIATELY  (0U)
-#define PITCH_MOTOR_TEST_PULSES          (1600)
+#define PITCH_MOTOR_TEST_ANGLE_DEGREES   (30U)
+#define PITCH_MOTOR_TEST_PULSES                                         \
+    ((int32_t) ((ZDT_X42S_EMM_PULSES_PER_REVOLUTION *                  \
+                 PITCH_MOTOR_TEST_ANGLE_DEGREES + 180U) / 360U))
 #define PITCH_MOTOR_TEST_SPEED_RPM       (20U)
 #define PITCH_MOTOR_TEST_ACCELERATION    (10U)
 #define PITCH_MOTOR_TEST_WAIT_MS         (2500U)
@@ -51,6 +54,17 @@ bool pitch_motor_move_relative(pitch_motor_t *motor, int32_t pulses,
     command.motion_mode = PITCH_MOTOR_REALTIME_RELATIVE;
     command.sync_flag = PITCH_MOTOR_EXECUTE_IMMEDIATELY;
     if (!StepperMotor_move(&motor->driver, &command)) {
+        motor->command_rejected_count++;
+        return false;
+    }
+
+    motor->command_queued_count++;
+    return true;
+}
+
+bool pitch_motor_stop(pitch_motor_t *motor)
+{
+    if ((!motor->enabled) || !StepperMotor_stop(&motor->driver)) {
         motor->command_rejected_count++;
         return false;
     }

@@ -434,6 +434,11 @@
               <FileType>1</FileType>
               <FilePath>..\pitch_tracker_control.c</FilePath>
             </File>
+            <File>
+              <FileName>target_recovery_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\target_recovery_control.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

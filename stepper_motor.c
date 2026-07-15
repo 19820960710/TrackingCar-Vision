@@ -24,6 +24,11 @@ bool StepperMotor_move(StepperMotor *motor, const StepperMotorMove *move)
     return ZdtX42s_startMoveEmm(&motor->protocol, &command);
 }
 
+bool StepperMotor_stop(StepperMotor *motor)
+{
+    return ZdtX42s_stopNow(&motor->protocol);
+}
+
 void StepperMotor_serviceTx(StepperMotor *motor, uint32_t now_ms)
 {
     ZdtX42s_serviceTx(&motor->protocol, now_ms);

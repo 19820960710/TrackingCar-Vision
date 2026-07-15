@@ -49,6 +49,7 @@ void pitch_motor_init(pitch_motor_t *motor, UART_Regs *uart, uint8_t address);
 bool pitch_motor_enable(pitch_motor_t *motor);
 bool pitch_motor_move_relative(pitch_motor_t *motor, int32_t pulses,
                                uint16_t speed_rpm, uint8_t acceleration);
+bool pitch_motor_stop(pitch_motor_t *motor);
 void pitch_motor_service_tx(pitch_motor_t *motor, uint32_t now_ms);
 void pitch_motor_poll(pitch_motor_t *motor);
 void pitch_motor_get_diagnostics(const pitch_motor_t *motor,
