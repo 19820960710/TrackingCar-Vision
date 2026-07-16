@@ -1,0 +1,231 @@
+/**
+ * @file    i2c_bus.c
+ * @brief   MSPM0G3507 硬件 I2C0 底层驱动 (通用)
+ *
+ * @details 从原 Component/mpu6050/mspm0_i2c 解耦, 逻辑不变, 仅改函数名:
+ *            mpu6050_i2c_init      → i2c0_init
+ *            mpu6050_i2c_sda_unlock→ i2c0_sda_unlock
+ *            mspm0_i2c_write       → i2c0_write
+ *            mspm0_i2c_read        → i2c0_read
+ *          延时依赖从 clock.h 改为 delay.h。
+ *
+ *   ── I2C 实例 ──
+ *   I2C_0_INST: SysConfig 中命名 "I2C_MPU6050" (历史命名), Controller Mode, 400kHz
+ *
+ *   ── 总线死锁恢复 ──
+ *   从机异常复位时 SDA 可能被拉低 → 死锁。i2c0_sda_unlock() 产生 9 个 SCL
+ *   时钟, SDA 恢复高电平即解锁。
+ *
+ *   ── 超时保护 ──
+ *   所有等待循环均有超时 (I2C0_TIMEOUT_LOOPS = 500000, 约 500ms @ 80MHz)。
+ */
+#include "ti_msp_dl_config.h"
+#include "delay.h"
+#include "i2c_bus.h"
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  配置常量
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/** @brief I2C 等待超时循环次数 (约相当于 500ms @ 80MHz) */
+#define I2C0_TIMEOUT_LOOPS  (500000U)
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  内部辅助
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 等待 I2C 控制器进入空闲状态; 超时则尝试解锁 SDA 总线。 */
+static int i2c0_wait_idle(void)
+{
+    uint32_t to = I2C0_TIMEOUT_LOOPS;
+
+    while (!(DL_I2C_getControllerStatus(I2C_0_INST) &
+             DL_I2C_CONTROLLER_STATUS_IDLE)) {
+        if (--to == 0U) {
+            i2c0_sda_unlock();
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  公开接口: I2C 总线管理
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+void i2c0_init(void)
+{
+    DL_I2C_reset(I2C_0_INST);
+
+    DL_GPIO_initPeripheralInputFunctionFeatures(GPIO_I2C_0_IOMUX_SDA,
+        GPIO_I2C_0_IOMUX_SDA_FUNC, DL_GPIO_INVERSION_DISABLE,
+        DL_GPIO_RESISTOR_NONE, DL_GPIO_HYSTERESIS_DISABLE,
+        DL_GPIO_WAKEUP_DISABLE);
+
+    DL_GPIO_initPeripheralInputFunctionFeatures(GPIO_I2C_0_IOMUX_SCL,
+        GPIO_I2C_0_IOMUX_SCL_FUNC, DL_GPIO_INVERSION_DISABLE,
+        DL_GPIO_RESISTOR_NONE, DL_GPIO_HYSTERESIS_DISABLE,
+        DL_GPIO_WAKEUP_DISABLE);
+
+    DL_GPIO_enableHiZ(GPIO_I2C_0_IOMUX_SDA);
+    DL_GPIO_enableHiZ(GPIO_I2C_0_IOMUX_SCL);
+
+    DL_I2C_enablePower(I2C_0_INST);
+    SYSCFG_DL_I2C_0_init();
+}
+
+void i2c0_sda_unlock(void)
+{
+    uint8_t cycleCnt = 0U;
+
+    DL_I2C_reset(I2C_0_INST);
+
+    DL_GPIO_initDigitalOutput(GPIO_I2C_0_IOMUX_SCL);
+
+    DL_GPIO_initDigitalInputFeatures(GPIO_I2C_0_IOMUX_SDA,
+        DL_GPIO_INVERSION_DISABLE, DL_GPIO_RESISTOR_NONE,
+        DL_GPIO_HYSTERESIS_DISABLE, DL_GPIO_WAKEUP_DISABLE);
+
+    DL_GPIO_clearPins(GPIO_I2C_0_SCL_PORT, GPIO_I2C_0_SCL_PIN);
+    DL_GPIO_enableOutput(GPIO_I2C_0_SCL_PORT, GPIO_I2C_0_SCL_PIN);
+
+    do {
+        DL_GPIO_clearPins(GPIO_I2C_0_SCL_PORT, GPIO_I2C_0_SCL_PIN);
+        delay_ms(1);
+
+        DL_GPIO_setPins(GPIO_I2C_0_SCL_PORT, GPIO_I2C_0_SCL_PIN);
+        delay_ms(1);
+
+        if (DL_GPIO_readPins(GPIO_I2C_0_SDA_PORT, GPIO_I2C_0_SDA_PIN)) {
+            break;
+        }
+    } while (++cycleCnt < 100U);
+
+    i2c0_init();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  公开接口: I2C 读写操作
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+int i2c0_write(uint8_t slave_addr,
+               uint8_t reg_addr,
+               uint8_t length,
+               uint8_t const *data)
+{
+    uint8_t  txBuffer[256];
+    uint16_t total;
+    uint16_t sent;
+    uint32_t to;
+
+    if (length == 0U) {
+        return 0;
+    }
+
+    txBuffer[0] = reg_addr;
+    for (uint16_t i = 0; i < length; i++) {
+        txBuffer[i + 1U] = data[i];
+    }
+    total = (uint16_t)length + 1U;
+
+    if (i2c0_wait_idle() != 0) {
+        return -1;
+    }
+
+    DL_I2C_flushControllerTXFIFO(I2C_0_INST);
+    DL_I2C_clearInterruptStatus(I2C_0_INST,
+        DL_I2C_INTERRUPT_CONTROLLER_TX_DONE);
+
+    sent = DL_I2C_fillControllerTXFIFO(I2C_0_INST, txBuffer, total);
+
+    DL_I2C_startControllerTransfer(I2C_0_INST, (uint32_t)slave_addr,
+                                   DL_I2C_CONTROLLER_DIRECTION_TX, total);
+
+    while (sent < total) {
+        to = I2C0_TIMEOUT_LOOPS;
+        while (!DL_I2C_getRawInterruptStatus(I2C_0_INST,
+                                             DL_I2C_INTERRUPT_CONTROLLER_TXFIFO_EMPTY)) {
+            if (--to == 0U) {
+                i2c0_sda_unlock();
+                return -1;
+            }
+        }
+        sent += DL_I2C_fillControllerTXFIFO(I2C_0_INST,
+                                             &txBuffer[sent], total - sent);
+    }
+
+    to = I2C0_TIMEOUT_LOOPS;
+    while (!DL_I2C_getRawInterruptStatus(I2C_0_INST,
+                                         DL_I2C_INTERRUPT_CONTROLLER_TX_DONE)) {
+        if (--to == 0U) {
+            i2c0_sda_unlock();
+            return -1;
+        }
+    }
+
+    DL_I2C_flushControllerTXFIFO(I2C_0_INST);
+    return 0;
+}
+
+int i2c0_read(uint8_t slave_addr,
+              uint8_t reg_addr,
+              uint8_t length,
+              uint8_t *data)
+{
+    uint16_t i = 0U;
+    uint32_t to;
+
+    if (length == 0U) {
+        return 0;
+    }
+
+    if (i2c0_wait_idle() != 0) {
+        return -1;
+    }
+
+    DL_I2C_flushControllerTXFIFO(I2C_0_INST);
+    DL_I2C_flushControllerRXFIFO(I2C_0_INST);
+
+    DL_I2C_transmitControllerData(I2C_0_INST, reg_addr);
+
+    I2C_0_INST->MASTER.MCTR = I2C_MCTR_RD_ON_TXEMPTY_ENABLE;
+
+    DL_I2C_clearInterruptStatus(I2C_0_INST,
+        DL_I2C_INTERRUPT_CONTROLLER_RX_DONE);
+
+    DL_I2C_startControllerTransfer(I2C_0_INST, (uint32_t)slave_addr,
+                                   DL_I2C_CONTROLLER_DIRECTION_RX, length);
+
+    while (!DL_I2C_getRawInterruptStatus(I2C_0_INST,
+                                         DL_I2C_INTERRUPT_CONTROLLER_RX_DONE)) {
+        if (!DL_I2C_isControllerRXFIFOEmpty(I2C_0_INST)) {
+            if (i < length) {
+                data[i++] = DL_I2C_receiveControllerData(I2C_0_INST);
+            } else {
+                (void)DL_I2C_receiveControllerData(I2C_0_INST);
+            }
+        }
+
+        to = I2C0_TIMEOUT_LOOPS;
+        while (DL_I2C_isControllerRXFIFOEmpty(I2C_0_INST) &&
+               !DL_I2C_getRawInterruptStatus(I2C_0_INST,
+                   DL_I2C_INTERRUPT_CONTROLLER_RX_DONE)) {
+            if (--to == 0U) {
+                I2C_0_INST->MASTER.MCTR = 0U;
+                i2c0_sda_unlock();
+                return -1;
+            }
+        }
+    }
+
+    while (!DL_I2C_isControllerRXFIFOEmpty(I2C_0_INST) && i < length) {
+        data[i++] = DL_I2C_receiveControllerData(I2C_0_INST);
+    }
+
+    I2C_0_INST->MASTER.MCTR = 0U;
+
+    DL_I2C_flushControllerTXFIFO(I2C_0_INST);
+    DL_I2C_flushControllerRXFIFO(I2C_0_INST);
+
+    return (i == length) ? 0 : -1;
+}

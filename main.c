@@ -28,7 +28,7 @@
 #include "led/led.h"             /* LED 指示灯 (PA22) */
 #include "led/key.h"             /* 用户按键 (PB21, 内部上拉, 按下低电平) */
 #include "UART/uart0.h"          /* 调试串口 (printf 重定向 + 收发双任务) */
-#include "mpu6050/mpu6050.h"     /* MPU6050 姿态传感器 (I2C0 + DMP) */
+#include "icm20602/icm20602.h"   /* ICM20602 6轴IMU (I2C0, Mahony软件解算) */
 #include "tb6612/tb6612.h"       /* TB6612 双路电机驱动 (PWM + GPIO 方向) */
 #include "encoder/encoder.h"     /* 双路增量编码器 (QEI + 软件解码) */
 #include "task/app_tasks.h"      /* FreeRTOS 任务创建与启动 */
@@ -46,9 +46,9 @@ static void prvSetupHardware(void)
      * 包括：时钟树配置 (80MHz)、所有 GPIO/I2C/UART/Timer 模块初始化 */
     SYSCFG_DL_init();
 
-    /* ── 第 1 步：使能 MPU6050 INT 引脚中断 ──
-     * 使能下降沿中断，DMP 数据就绪时产生中断通知 mpu_task */
-    MPU6050_IntEnable();
+    /* ── 第 1 步：使能 ICM20602 INT 引脚中断 ──
+     * 当前未接 INT 脚，姿态任务用 10ms 轮询; 保留中断框架供后续接线 */
+    icm20602_int_enable();
 
     /* ── 第 2 步：初始化各外设模块 ── */
     led_init();       /* LED (PA22) 已由 SysConfig 初始化，此处留作扩展 */

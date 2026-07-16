@@ -23,7 +23,7 @@
 #include "led/led.h"
 #include "led/key.h"
 #include "oled/oled.h"
-#include "mpu6050/mpu6050.h"
+#include "icm20602/icm20602.h"
 #include "encoder/encoder.h"
 #include "service/speed_service.h"
 #include "service/attitude_service.h"
@@ -35,7 +35,7 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  *  任务句柄：只保存需要被 ISR 通知的任务，其余任务句柄不保留。
  * ═══════════════════════════════════════════════════════════════════════════ */
-static TaskHandle_t g_attitude_task_handle = NULL;   /* MPU6050 INT 数据就绪通知 */
+static TaskHandle_t g_attitude_task_handle = NULL;   /* ICM20602/I2C 完成通知 */
 static TaskHandle_t g_yaw_loop_task_handle = NULL;    /* TIMER_0 10ms 节拍通知 */
 static TaskHandle_t g_speed_loop_task_handle = NULL;  /* 由 yaw_loop_task 通知 */
 
@@ -69,11 +69,11 @@ int app_tasks_wait_yaw_settled(uint32_t timeout_ms)
         if (done) {
             return 0;
         }
-        if (timeout_ms == 0U) {          /* 非阻塞轮询：未到位返回 1 */
+        if (timeout_ms == 0U) {
             return 1;
         }
         if ((xTaskGetTickCount() - start_tick) >= timeout_ticks) {
-            return 0;                     /* 超时按已结束处理 */
+            return 0;
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -146,15 +146,17 @@ static void led_task(void *pvParameters)
     }
 }
 
-/* 姿态任务：MPU6050 INT 通知驱动，DMP 读取后送入稳定检测。
- * 复位后等待 pitch/roll/yaw 在稳定窗口内满足阈值才发布姿态，约需 20s。 */
+/* 姿态任务：ICM20602 10ms 定时轮询驱动，Mahony 解算后送入稳定检测。
+ * 当前未接 INT 脚，采用 vTaskDelay(10ms) 轮询; 保留 ISR 通知框架，
+ * 接上 INT 后通知会额外唤醒任务 (不冲突)。
+ * 复位后等待 pitch/roll/yaw 在稳定窗口内满足阈值才发布姿态。 */
 static void attitude_task(void *pvParameters)
 {
     (void)pvParameters;
 
-    /* 延迟 200ms 等外设稳定后再初始化 MPU6050。 */
+    /* 延迟 200ms 等外设稳定后再初始化 ICM20602。 */
     vTaskDelay(pdMS_TO_TICKS(200));
-    if (MPU6050_Init() != 0) {
+    if (icm20602_init() != 0) {
         /* 初始化失败：发布无效姿态后挂起，避免反复重试 I2C。 */
         attitude_service_publish_invalid();
         for (;;) {
@@ -165,13 +167,13 @@ static void attitude_task(void *pvParameters)
     attitude_service_reset();
     (void)ulTaskNotifyTake(pdTRUE, 0);   /* 清除启动期间残留通知 */
     for (;;) {
-        /* 阻塞等待 PB4 中断发出的数据就绪通知。 */
-        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        mpu_attitude_t att;
-        if (Read_Quad(&att) == 0) {
-            /* att 为 Read_Quad 结构体输出，替代旧的全局变量。 */
+        /* 10ms 轮询读取 + Mahony 解算 (100Hz)。 */
+        icm_attitude_t att;
+        if (icm20602_get_attitude(&att) == 0) {
             attitude_service_process_sample(att.pitch, att.roll, att.yaw);
         }
+        /* 若 INT 已接线，此通知会提前唤醒; 否则 10ms 到期后继续。 */
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
     }
 }
 
@@ -308,19 +310,16 @@ static void oled_task(void *pvParameters)
         }
 
         if (!attitude_seen) {
-            /* MPU 还在稳定窗口内，尚未发布过有效姿态。 */
-            OLED_vsprint(0, 0, 16, "MPU stabilizing");
-            OLED_vsprint(0, 16, 16, "wait about 20s ");
+            OLED_vsprint(0, 0, 16, "ICM stabilizing");
+            OLED_vsprint(0, 16, 16, "keep IMU still  ");
             oled_print_yaw_target(&yaw_state);
             OLED_vsprint(0, 48, 16, "yaw not ready  ");
         } else if (!attitude.valid) {
-            /* 曾有效但现在失效，提示检查 MPU6050 接线。 */
-            OLED_vsprint(0, 0, 16, "mpu failure    ");
+            OLED_vsprint(0, 0, 16, "icm failure    ");
             OLED_vsprint(0, 16, 16, "yaw target: ---");
             OLED_vsprint(0, 32, 16, "yaw now   : ---");
-            OLED_vsprint(0, 48, 16, "check MPU6050  ");
+            OLED_vsprint(0, 48, 16, "check ICM20602 ");
         } else {
-            /* 正常显示：符号与数值分离，角度按 X.X 格式输出。 */
             int32_t tgt_abs = util_abs_i32(yaw_state.target_yaw_deg10);
             int32_t now_abs = util_abs_i32(attitude.yaw_deg10);
             int32_t err_abs = util_abs_i32(yaw_state.error_yaw_deg10);
@@ -384,8 +383,8 @@ void GROUP1_IRQHandler(void)
         encoder_right_irq_handler();
     }
 
-    if (MPU6050_IntIsPending()) {
-        MPU6050_IntClear();
+    if (icm20602_int_is_pending()) {
+        icm20602_int_clear();
         if (g_attitude_task_handle != NULL) {
             vTaskNotifyGiveFromISR(g_attitude_task_handle,
                                    &xHigherPriorityTaskWoken);
