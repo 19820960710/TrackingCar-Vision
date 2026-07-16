@@ -155,7 +155,16 @@ static bool m_yaw_holding = false;
 static uint32_t m_last_cycle_stamp = 0;
 
 /** @brief 陀螺量程换算系数: ±250°/s → (250/32768)*(π/180) ≈ 0.000133 */
-#define GYRO_SCALE_250   0.000133f
+#define GYRO_SCALE_250       0.000133f
+
+/**
+ * @brief Z 轴正负方向实测灵敏度校准
+ * @note  水平连续三圈标定结果：
+ *        负方向(顺时针) -1067.2°/目标-1080° → ×1.011994
+ *        正方向(逆时针) +1073.16°/目标+1080° → ×1.006374
+ */
+#define GYRO_SCALE_Z_NEG     (GYRO_SCALE_250 * 1.011994f)
+#define GYRO_SCALE_Z_POS     (GYRO_SCALE_250 * 1.006374f)
 
 /** @brief 加速度归一化系数: ±2g → 1/16384 g/LSB */
 #define ACC_SCALE_2G     (1.0f / 16384.0f)
@@ -333,10 +342,12 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
     ax = (float)acc_x * ACC_SCALE_2G;
     ay = (float)acc_y * ACC_SCALE_2G;
     az = (float)acc_z * ACC_SCALE_2G;
-    /* 保留三轴零偏的小数部分；强转 int16_t 会重新引入最多 1 LSB 零偏。 */
+    /* 保留三轴零偏的小数部分；Z 轴使用正负方向独立标定比例。 */
+    float corrected_gz_lsb = (float)gyr_z - gyro_zero_z;
     gx = ((float)gyr_x - gyro_zero_x) * GYRO_SCALE_250;
     gy = ((float)gyr_y - gyro_zero_y) * GYRO_SCALE_250;
-    gz = ((float)gyr_z - gyro_zero_z) * GYRO_SCALE_250;
+    gz = corrected_gz_lsb *
+         ((corrected_gz_lsb >= 0.0f) ? GYRO_SCALE_Z_POS : GYRO_SCALE_Z_NEG);
 
     /* ── 动态 Kp/Ki: 剧烈运动 (|a|>1.2g) 时增大增益 ── */
     {
@@ -366,7 +377,6 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
         float acc_mag_dz = fabsf(acc_mag - m_last_acc_mag);
         float corrected_gx_lsb = (float)gyr_x - gyro_zero_x;
         float corrected_gy_lsb = (float)gyr_y - gyro_zero_y;
-        float corrected_gz_lsb = (float)gyr_z - gyro_zero_z;
         m_last_acc_mag = acc_mag;
 
         bool accel_still = (fabsf(acc_mag - 1.0f) < ACC_MAG_THRESHOLD) &&
