@@ -113,8 +113,10 @@ GPIO6.associatedPins[1].interruptPriority = "3";
 GPIO6.associatedPins[1].polarity          = "RISE_FALL";
 GPIO6.associatedPins[1].pin.$assign       = "PA14";
 
-I2C1.$name                     = "I2C_0";
-I2C1.basicEnableController     = true;
+I2C1.$name                             = "I2C_0";
+I2C1.basicEnableController             = true;
+I2C1.basicControllerStandardBusSpeed   = "Fast";   /* 400kHz */
+I2C1.basicControllerBusSpeed            = 400000;
 I2C1.peripheral.$assign        = "I2C0";
 I2C1.peripheral.sdaPin.$assign = "PA0";
 I2C1.peripheral.sclPin.$assign = "PA1";

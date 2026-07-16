@@ -546,13 +546,12 @@ int icm20602_async_finish(icm_attitude_t *out)
 
 void icm20602_int_enable(void)
 {
-    /* ICM20602 INT 引脚 (PB4) 中断: 保留框架, 当前未接线 */
+    /* ICM20602 INT 引脚 (PB4) 中断: 保留框架, 当前未接线。
+     * I2C0 控制器中断 (异步读) 改由 attitude_task 在 icm20602_init() 后
+     * 调用 i2c0_enable_int() 使能, 避免 i2c0_init() 的 reset 清零 IMASK。 */
     NVIC_ClearPendingIRQ(ICM_INT_IRQN);
     NVIC_SetPriority(ICM_INT_IRQN, 3);
     NVIC_EnableIRQ(ICM_INT_IRQN);
-
-    /* I2C0 控制器中断: 1kHz 异步读取必需 */
-    i2c0_enable_int();
 }
 
 int icm20602_int_is_pending(void)

@@ -158,20 +158,24 @@ static void attitude_task(void *pvParameters)
 
     /* 延迟 200ms 等外设稳定后再初始化 ICM20602。 */
     vTaskDelay(pdMS_TO_TICKS(200));
-    if (icm20602_init() != 0) {
+    int init_ret = icm20602_init();
+    if (init_ret != 0) {
         /* 初始化失败：发布无效姿态后挂起，避免反复重试 I2C。 */
         attitude_service_publish_invalid();
         for (;;) {
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
     }
+    /* init 用阻塞读; init 完成后才使能 I2C 中断进入异步模式,
+     * 避免 i2c0_init() 的 reset 清零 IMASK, 也避免阻塞读被 ISR 干扰。 */
+    i2c0_enable_int();
 
     attitude_service_reset();
     (void)ulTaskNotifyTake(pdTRUE, 0);   /* 清除启动期间残留通知 */
     for (;;) {
         /* 启动异步读取 (非阻塞, 立即返回)。 */
         if (icm20602_async_start() != 0) {
-            /* 启动失败 (总线忙/错误): 等一帧重试。 */
+            /* 启动失败 (总线忙): 等一帧重试。 */
             vTaskDelay(pdMS_TO_TICKS(1));
             continue;
         }
