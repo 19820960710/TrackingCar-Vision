@@ -14,29 +14,28 @@
  *
  *   ── 硬件连接 ──
  *   I2C: PA0(SDA)/PA1(SCL), I2C0 400kHz, 与原 MPU6050 共用
- *   INT: PB4, 当前未接线; 保留中断接口框架, 任务用 10ms 轮询
+ *   INT: PB4, 当前未接线; I2C 传输完成由控制器中断通知任务
  *
  *   ── 解算原理 (Mahony 四元数互补滤波) ──
- *     1) 100Hz 采样率读取 6 轴原始数据 (突发 14 字节)
+ *     1) 约 1kHz 异步读取 6 轴原始数据 (突发 14 字节)
  *     2) 加速度计归一化 → 重力参考方向叉积求姿态误差
  *     3) PI 补偿陀螺仪 → 四元数积分 → 归一化
  *     4) 四元数 → pitch/roll/yaw (°)
  *   动态 Kp/Ki: 检测到剧烈运动 (|a|>1.2g) 时增大增益, 加快收敛。
- *   yaw 无磁力计绝对参考, 含静止锁定 + 运行时 Z 轴零偏追踪 (静止 3s
- *   自动重新校准零偏, 对抗温度漂移)。
+ *   yaw 无磁力计绝对参考；使用 ZRU 零速更新、窗口去抖和连续 offset
+ *   补偿抑制静止漂移，同时保留运动期间的真实积分。
  */
 
 #include "ti_msp_dl_config.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
-#include <stdio.h>
 #include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
 #include <math.h>
 
 #include "icm20602/icm20602.h"
 #include "common/i2c_bus.h"    /* 硬件 I2C0 底层驱动 */
-#include "common/delay.h"      /* delay_ms / get_time_ms */
+#include "common/delay.h"      /* delay_ms */
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  I2C 寄存器读写 (基于 mspm0_i2c 硬件 I2C0)
@@ -122,24 +121,32 @@ typedef enum {
 /** @brief 初始化完成标志 (0=未就绪, 1=就绪) */
 static int g_icm20602_ready = 0;
 
-/** @brief Z 轴陀螺仪零漂 (软校准 100 次均值) */
+/** @brief Z 轴陀螺仪零漂 (启动时 256 次均值 + 运行时 ZRU 块平均) */
 static float gyro_zero_z = 0.0f;
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  Mahony 四元数解算内部状态 (静态, 跨调用保持)
  * ═══════════════════════════════════════════════════════════════════════════ */
 static float q_w = 1.0f, q_x = 0.0f, q_y = 0.0f, q_z = 0.0f;
-static float m_integralFBx = 0.0f, m_integralFBy = 0.0f, m_integralFBz = 0.0f;
-static float m_locked_yaw = 0.0f;
-static int8_t m_yaw_locked = 0;
-static float m_last_gz = 0.0f;
-static uint16_t m_stable_count = 0;   /* 静止稳定计数 (uint16_t, 封顶避免溢出) */
+static float m_integralFBx = 0.0f, m_integralFBy = 0.0f;
+static float m_last_acc_mag = 1.0f;   /* 上次加速度幅值 (g), 用于静止检测 */
+static uint16_t m_stable_count = 0;    /* 静止稳定计数 */
+static float m_quiet_sum = 0.0f;      /* 100ms 窗口内校准后 Z 轴和 (LSB) */
+static uint16_t m_quiet_count = 0;
+static uint8_t m_motion_windows = 0;   /* 连续运动窗口计数（退出迟滞） */
+static uint8_t m_acc_motion_count = 0; /* 连续加速度异常帧计数 */
+static bool m_zru_still = false;       /* 去抖后静止状态 */
+static int32_t m_zru_sum = 0;          /* ZRU 静止原始 Z 轴累计 */
+static uint16_t m_zru_count = 0;       /* ZRU 累计样本数 */
+static float m_yaw_offset = 0.0f;      /* 补偿静止时四元数 X/Y 修正对 yaw 的耦合 */
+static float m_held_yaw = 0.0f;
+static bool m_yaw_holding = false;
 
-/** @brief 采样周期默认值 (s). 100Hz → 0.01s. 首次调用或时间戳异常时使用 */
-#define MAHONY_DT_DEFAULT  0.01f
+/** @brief 1kHz 默认积分步长；仅首次调用或时间戳异常时使用。 */
+#define MAHONY_DT_DEFAULT  0.001f
 
-/** @brief 上次采样时间戳 (ms), 用于计算真实 dt */
-static uint32_t m_last_time_ms = 0;
+/** @brief 上次单调 cycle 时间戳；FreeRTOS tick + SysTick->VAL 组合。 */
+static uint32_t m_last_cycle_stamp = 0;
 
 /** @brief 陀螺量程换算系数: ±250°/s → (250/32768)*(π/180) ≈ 0.000133 */
 #define GYRO_SCALE_250   0.000133f
@@ -173,9 +180,9 @@ static uint32_t m_last_time_ms = 0;
  *
  * 配置:
  *   - 复位 + 唤醒
- *   - 采样率 100Hz (SMPLRT_DIV=9, DLPF 使能后内部 1kHz/(1+9)=100Hz)
- *   - 陀螺低通 5Hz (CONFIG=Band_5Hz, 使能 DLPF 使采样分频生效)
- *   - 加速度低通 5Hz (ACCEL_CONFIG_2=Band_5Hz, ICM20602 独有)
+ *   - 采样率 1kHz (SMPLRT_DIV=0)
+ *   - 陀螺低通 92Hz (CONFIG=Band_92Hz)
+ *   - 加速度低通 92Hz (ACCEL_CONFIG_2=Band_92Hz)
  *   - 陀螺 ±250°/s, 加速度 ±2g
  *   - FIFO 关闭
  *   - INT 引脚: 低有效 50us 脉冲 (INT_PIN_CFG=0x80), 兼容下降沿
@@ -220,7 +227,7 @@ static void icm_register_init(void)
  * @brief 静止时采样 256 次 Z 轴陀螺, 取均值作为零点
  * @note  采样间隔 10ms, 总耗时约 2.5s。需保持模块静止。
  *        256 次 (原 100) 提高初始零偏精度, 减小残余漂移。
- *        运行时静止 3s 后还会自动追踪零偏 (见 icm_mahony_update)。
+ *        运行时由 ZRU 每 1000 个静止样本重新块平均零偏。
  */
 static void icm_soft_calibrate_z(void)
 {
@@ -244,12 +251,19 @@ static void icm_soft_calibrate_z(void)
  * @brief 读取 6 轴原始数据 + Mahony 四元数解算 → 更新内部 pitch/roll/yaw
  *
  * 数据来源: 从 0x3B 突发读 14 字节 (AccX/Y/Z + 温度2B + GyroX/Y/Z)
- * 算法: Mahony 互补滤波 (动态 Kp/Ki, yaw 静止锁定, 手动漂移补偿)
+ * 算法: 标准 Mahony 互补滤波 + ZRU 静止零角速度更新
  *
  * @param  buf  14 字节原始数据 (0x3B..0x48: AccXYZ + Temp + GyroXYZ)
  * @param  out  姿态输出 (°)
  * @return 0=成功
  */
+static float wrap_angle_deg(float angle)
+{
+    while (angle > 180.0f) angle -= 360.0f;
+    while (angle < -180.0f) angle += 360.0f;
+    return angle;
+}
+
 static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
 {
     int16_t acc_x, acc_y, acc_z;
@@ -258,8 +272,9 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
     float recipNorm;
     float qDot1, qDot2, qDot3, qDot4;
     float twoKp, twoKi;
+    float halfex = 0.0f, halfey = 0.0f;
     float dt;
-    uint32_t now_ms;
+    bool is_still = false;
 
     acc_x = ((int16_t)buf[0]  << 8) | buf[1];
     acc_y = ((int16_t)buf[2]  << 8) | buf[3];
@@ -270,22 +285,29 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
     gyr_z = ((int16_t)buf[12] << 8) | buf[13];
 
     /* ── 计算真实 dt (s) ──
-     * 用系统时间戳差值, 避免 vTaskDelay 周期不准导致积分比例失真
-     * (旧版固定 0.01s, 实测旋转 90° 只到 ~80°, 偏小约 11%)。
-     * 首次调用或时间戳回绕/异常时用默认值。 */
-    (void)get_time_ms(&now_ms);
-    if (m_last_time_ms == 0U) {
+     * 仅读 SysTick->VAL 无法判断跨过几个 1ms reload；旧实现偶发把周期误判。
+     * 组合 FreeRTOS tick 与 SysTick->VAL 得到单调 cycle 时间戳。 */
+    TickType_t tick_a, tick_b;
+    uint32_t systick_val;
+    do {
+        tick_a = xTaskGetTickCount();
+        systick_val = SysTick->VAL;
+        tick_b = xTaskGetTickCount();
+    } while (tick_a != tick_b);
+
+    uint32_t cycles_per_tick = SysTick->LOAD + 1U;
+    uint32_t cycle_stamp = (uint32_t)tick_a * cycles_per_tick +
+                           (cycles_per_tick - 1U - systick_val);
+    if (m_last_cycle_stamp == 0U) {
         dt = MAHONY_DT_DEFAULT;
     } else {
-        uint32_t delta_ms = now_ms - m_last_time_ms;
-        if (delta_ms == 0U || delta_ms > 100U) {
-            /* 异常 (过短/溢出/首帧) → 用默认值, 避免发散 */
+        uint32_t delta_cycles = cycle_stamp - m_last_cycle_stamp;
+        dt = (float)delta_cycles / (float)CPUCLK_FREQ;
+        if (dt < 0.0002f || dt > 0.005f) {
             dt = MAHONY_DT_DEFAULT;
-        } else {
-            dt = (float)delta_ms * 0.001f;
         }
     }
-    m_last_time_ms = now_ms;
+    m_last_cycle_stamp = cycle_stamp;
 
     /* ── 单位换算 ──
      * 加速度: LSB / 16384 → g (±2g 量程)
@@ -295,7 +317,8 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
     az = (float)acc_z * ACC_SCALE_2G;
     gx = (float)gyr_x * GYRO_SCALE_250;
     gy = (float)gyr_y * GYRO_SCALE_250;
-    gz = (float)(gyr_z - (int16_t)gyro_zero_z) * GYRO_SCALE_250;
+    /* 保留 gyro_zero_z 的小数部分；强转 int16_t 会重新引入最多 1 LSB 零偏。 */
+    gz = ((float)gyr_z - gyro_zero_z) * GYRO_SCALE_250;
 
     /* ── 动态 Kp/Ki: 剧烈运动 (|a|>1.2g) 时增大增益 ── */
     {
@@ -309,50 +332,83 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
         }
     }
 
-    /* ── yaw 静止锁定 + 运行时 Z 轴零偏追踪 ──
-     * 纯陀螺 yaw 无磁力计绝对参考, Z 轴零漂必然累积。init 软校准只做一次,
-     * 温度变化/长期运行后零偏会偏移。这里在静止判据下自动追踪零偏:
-     *   - 200ms 连续稳定 → 锁定 yaw (抑制静止漂移)
-     *   - 3s 连续稳定 → 一阶低通缓慢更新 gyro_zero_z (对抗温度漂移)
-     * 判据严格 (gz 连续几乎不变), 避免吃掉真实缓慢转动。 */
+    /* ── ZRU: 静止零角速度更新 ──
+     * 用 100ms 窗口均值而非单帧阈值区分噪声与真实慢转动：静止噪声均值
+     * 接近 0，而持续旋转具有非零均值。阈值 0.08°/s，远小于旧版 0.5°/s。
+     * 确认静止后 gz 强制为 0；每 1000 帧块平均更新 gyro_zero_z。 */
     {
-        const float GYRO_THRESHOLD = 0.002f;       /* gz 变化阈值 (rad/s) */
-        const uint16_t STABLE_SAMPLES = 200;        /* 200ms 稳定 @1kHz → 锁定 yaw */
-        const uint16_t CAL_STABLE_SAMPLES = 3000;   /* 3s 稳定 @1kHz → 追踪零偏 */
-        const float ZERO_TRACK_ALPHA = 0.002f;      /* 一阶低通系数 (缓慢融合) */
+        const float ACC_MAG_THRESHOLD = 0.05f;     /* |a|-1g 容差 (g) */
+        const float ACC_DZ_THRESHOLD  = 0.03f;     /* |a| 帧间变化 (g) */
+        const float GYRO_SPIKE_LSB    = 262.0f;    /* 2°/s：立即判运动 */
+        const float QUIET_ENTER_DPS   = 0.08f;     /* 进入静止阈值 */
+        const float QUIET_EXIT_DPS    = 0.15f;     /* 退出静止阈值（迟滞） */
+        const uint16_t QUIET_WINDOW   = 100;
+        const uint16_t ZRU_BLOCK_SAMPLES = 1000;
 
-        if (fabsf(gz - m_last_gz) < GYRO_THRESHOLD) {
-            if (m_stable_count < 60000U) {          /* 封顶避免溢出 (uint16_t) */
-                m_stable_count++;
+        float acc_mag = sqrtf(ax * ax + ay * ay + az * az);
+        float acc_mag_dz = fabsf(acc_mag - m_last_acc_mag);
+        float corrected_gz_lsb = (float)gyr_z - gyro_zero_z;
+        m_last_acc_mag = acc_mag;
+
+        bool accel_still = (fabsf(acc_mag - 1.0f) < ACC_MAG_THRESHOLD) &&
+                           (acc_mag_dz < ACC_DZ_THRESHOLD);
+
+        if (fabsf(corrected_gz_lsb) > GYRO_SPIKE_LSB) {
+            /* 明显旋转立即退出。 */
+            m_zru_still = false;
+            m_motion_windows = 0;
+            m_quiet_sum = 0;
+            m_quiet_count = 0;
+        } else if (!accel_still) {
+            /* 忽略单帧振动；连续 20ms 异常才退出静止。 */
+            if (m_acc_motion_count < 20U) m_acc_motion_count++;
+            if (m_acc_motion_count >= 20U) m_zru_still = false;
+            m_quiet_sum = 0;
+            m_quiet_count = 0;
+        } else {
+            m_acc_motion_count = 0;
+            m_quiet_sum += corrected_gz_lsb;
+            m_quiet_count++;
+            if (m_quiet_count >= QUIET_WINDOW) {
+                float mean_dps = ((float)m_quiet_sum / (float)m_quiet_count) / 131.0f;
+                float abs_mean = fabsf(mean_dps);
+                if (!m_zru_still) {
+                    if (abs_mean < QUIET_ENTER_DPS) {
+                        m_zru_still = true;
+                        m_motion_windows = 0;
+                    }
+                } else if (abs_mean > QUIET_EXIT_DPS) {
+                    if (++m_motion_windows >= 2U) {
+                        m_zru_still = false;
+                        m_motion_windows = 0;
+                    }
+                } else {
+                    m_motion_windows = 0;
+                }
+                m_quiet_sum = 0;
+                m_quiet_count = 0;
             }
+        }
+
+        is_still = m_zru_still;
+        if (is_still) {
+            if (m_stable_count < 60000U) m_stable_count++;
+            if (accel_still) {
+                m_zru_sum += gyr_z;
+                m_zru_count++;
+                if (m_zru_count >= ZRU_BLOCK_SAMPLES) {
+                    gyro_zero_z = (float)m_zru_sum / (float)m_zru_count;
+                    m_zru_sum = 0;
+                    m_zru_count = 0;
+                }
+            }
+            gz = 0.0f;
         } else {
             m_stable_count = 0;
-            m_yaw_locked = 0;
-        }
-        m_last_gz = gz;
-
-        /* 200ms 稳定 → 锁定 yaw 防静止漂移 */
-        if (m_stable_count >= STABLE_SAMPLES && m_yaw_locked == 0) {
-            m_yaw_locked = 1;
-            m_locked_yaw = atan2f(2.0f * (q_w * q_z + q_x * q_y),
-                                  1.0f - 2.0f * (q_y * q_y + q_z * q_z))
-                           * 57.29578f;
-        }
-
-        /* 3s 连续稳定 → 运行时追踪 Z 轴零偏
-         * 用原始 gyr_z (LSB) 更新 gyro_zero_z, 缓慢一阶低通融合。
-         * 持续静止时每帧都微调, 对抗温度漂移; 一旦运动 m_stable_count 清零。 */
-        if (m_stable_count >= CAL_STABLE_SAMPLES) {
-            gyro_zero_z = gyro_zero_z * (1.0f - ZERO_TRACK_ALPHA)
-                          + (float)gyr_z * ZERO_TRACK_ALPHA;
+            m_zru_sum = 0;
+            m_zru_count = 0;
         }
     }
-
-    /* ── 四元数微分 (陀螺积分) ── */
-    qDot1 = 0.5f * (-q_x * gx - q_y * gy - q_z * gz);
-    qDot2 = 0.5f * ( q_w * gx + q_y * gz - q_z * gy);
-    qDot3 = 0.5f * ( q_w * gy - q_x * gz + q_z * gx);
-    qDot4 = 0.5f * ( q_w * gz + q_x * gy - q_y * gx);
 
     /* ── 加速度归一化 ── */
     recipNorm = 1.0f / sqrtf(ax * ax + ay * ay + az * az);
@@ -377,36 +433,34 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
         float halfvy = q0q1 + q2q3;
         float halfvz = q0q0 - 0.5f + q3q3;
 
-        float halfex = (ay * halfvz - az * halfvy);
-        float halfey = (az * halfvx - ax * halfvz);
-        float halfez = (ax * halfvy - ay * halfvx);
+        halfex = (ay * halfvz - az * halfvy);
+        halfey = (az * halfvx - ax * halfvz);
 
         if (twoKi > 0.0f) {
             m_integralFBx += twoKi * halfex * dt;
             m_integralFBy += twoKi * halfey * dt;
-            m_integralFBz += twoKi * halfez * dt;
             gx += m_integralFBx;
             gy += m_integralFBy;
-            gz += m_integralFBz;
         } else {
             m_integralFBx = 0.0f;
             m_integralFBy = 0.0f;
-            m_integralFBz = 0.0f;
         }
-
+        /* 6轴无磁力计时，加速度只能约束重力方向 (pitch/roll)，无法提供
+         * 绝对 yaw 参考。禁止 Z 轴 PI 反馈，避免误差均值持续注入 yaw。 */
         gx += twoKp * halfex;
         gy += twoKp * halfey;
-        gz += twoKp * halfez;
-
-        qDot1 -= q_x * halfex + q_y * halfey + q_z * halfez;
-        qDot2 += q_w * halfex - q_z * halfey + q_y * halfez;
-        qDot3 += q_z * halfex + q_w * halfey - q_x * halfez;
-        qDot4 += -q_y * halfex + q_x * halfey + q_w * halfez;
     }
 
+    /* ── 标准 Mahony：用完成 PI 反馈后的角速度计算四元数微分 ──
+     * 旧实现先算 qDot，随后修改 gx/gy/gz 却未重算，同时又把未乘增益的
+     * half-error 直接加到 qDot，会把加速度误差持续注入 yaw。 */
+    qDot1 = 0.5f * (-q_x * gx - q_y * gy - q_z * gz);
+    qDot2 = 0.5f * ( q_w * gx + q_y * gz - q_z * gy);
+    qDot3 = 0.5f * ( q_w * gy - q_x * gz + q_z * gx);
+    qDot4 = 0.5f * ( q_w * gz + q_x * gy - q_y * gx);
+
     /* ── 四元数积分 ──
-     * Z 轴零漂由 icm_soft_calibrate_z (init 256 次均值) + 运行时静止追踪
-     * (3s 稳定后一阶低通更新 gyro_zero_z) 双重抑制, 不再需要手动补偿值。 */
+     * Z 轴零漂由启动 256 次均值 + 运行时 ZRU 块平均和零速约束抑制。 */
     q_w += qDot1 * dt;
     q_x += qDot2 * dt;
     q_y += qDot3 * dt;
@@ -423,16 +477,25 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
     q_y *= recipNorm;
     q_z *= recipNorm;
 
-    /* ── 四元数 → 欧拉角 (Z-Y-X) ── */
+    /* ── 四元数 → 欧拉角 (Z-Y-X) ──
+     * 静止时保持 yaw 并同步更新 offset；恢复运动后连续、无跳变。 */
     out->roll  = atan2f(2.0f * (q_w * q_x + q_y * q_z),
                         1.0f - 2.0f * (q_x * q_x + q_y * q_y)) * 57.29578f;
     out->pitch = asinf(2.0f * (q_w * q_y - q_z * q_x)) * 57.29578f;
 
-    if (m_yaw_locked) {
-        out->yaw = m_locked_yaw;
+    float raw_yaw = atan2f(2.0f * (q_w * q_z + q_x * q_y),
+                           1.0f - 2.0f * (q_y * q_y + q_z * q_z)) * 57.29578f;
+    if (is_still) {
+        if (!m_yaw_holding) {
+            m_held_yaw = wrap_angle_deg(raw_yaw + m_yaw_offset);
+            m_yaw_holding = true;
+        }
+        /* 持续调整 offset，使退出静止时 raw+offset 与保持值连续。 */
+        m_yaw_offset = wrap_angle_deg(m_held_yaw - raw_yaw);
+        out->yaw = m_held_yaw;
     } else {
-        out->yaw = atan2f(2.0f * (q_w * q_z + q_x * q_y),
-                          1.0f - 2.0f * (q_y * q_y + q_z * q_z)) * 57.29578f;
+        m_yaw_holding = false;
+        out->yaw = wrap_angle_deg(raw_yaw + m_yaw_offset);
     }
 
     return 0;
@@ -448,9 +511,9 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
  *
  * @note   流程:
  *         1) I2C 总线初始化 + 死锁恢复
- *         2) 寄存器配置 (采样率 100Hz, 量程 ±250°/s + ±2g, 中断)
+ *         2) 寄存器配置 (采样率 1kHz, 量程 ±250°/s + ±2g)
  *         3) WHO_AM_I 校验 (期望 0x12)
- *         4) Z 轴陀螺软校准 (100×10ms ≈ 1s)
+ *         4) Z 轴陀螺软校准 (256×10ms ≈ 2.56s)
  *         5) 清 INT 状态残留, 标记就绪
  *
  *         初始化时间: ~1.2s (主要耗时在软校准采样)
