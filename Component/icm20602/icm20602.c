@@ -121,22 +121,28 @@ typedef enum {
 /** @brief 初始化完成标志 (0=未就绪, 1=就绪) */
 static int g_icm20602_ready = 0;
 
-/** @brief Z 轴陀螺仪零漂 (启动时 256 次均值 + 运行时 ZRU 块平均) */
+/** @brief 三轴陀螺仪零漂 (启动时 256 次均值 + 运行时 ZRU 块平均) */
+static float gyro_zero_x = 0.0f;
+static float gyro_zero_y = 0.0f;
 static float gyro_zero_z = 0.0f;
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  Mahony 四元数解算内部状态 (静态, 跨调用保持)
  * ═══════════════════════════════════════════════════════════════════════════ */
 static float q_w = 1.0f, q_x = 0.0f, q_y = 0.0f, q_z = 0.0f;
-static float m_integralFBx = 0.0f, m_integralFBy = 0.0f;
+static float m_integralFBx = 0.0f, m_integralFBy = 0.0f, m_integralFBz = 0.0f;
 static float m_last_acc_mag = 1.0f;   /* 上次加速度幅值 (g), 用于静止检测 */
 static uint16_t m_stable_count = 0;    /* 静止稳定计数 */
-static float m_quiet_sum = 0.0f;      /* 100ms 窗口内校准后 Z 轴和 (LSB) */
+static float m_quiet_sum_x = 0.0f;    /* 100ms 窗口内校准后三轴和 (LSB) */
+static float m_quiet_sum_y = 0.0f;
+static float m_quiet_sum_z = 0.0f;
 static uint16_t m_quiet_count = 0;
 static uint8_t m_motion_windows = 0;   /* 连续运动窗口计数（退出迟滞） */
 static uint8_t m_acc_motion_count = 0; /* 连续加速度异常帧计数 */
 static bool m_zru_still = false;       /* 去抖后静止状态 */
-static int32_t m_zru_sum = 0;          /* ZRU 静止原始 Z 轴累计 */
+static int32_t m_zru_sum_x = 0;        /* ZRU 静止原始三轴累计 */
+static int32_t m_zru_sum_y = 0;
+static int32_t m_zru_sum_z = 0;
 static uint16_t m_zru_count = 0;       /* ZRU 累计样本数 */
 static float m_yaw_offset = 0.0f;      /* 补偿静止时四元数 X/Y 修正对 yaw 的耦合 */
 static float m_held_yaw = 0.0f;
@@ -220,27 +226,39 @@ static void icm_register_init(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- *  Z 轴软校准 (减小 yaw 零漂)
+ *  三轴陀螺软校准
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 /**
- * @brief 静止时采样 256 次 Z 轴陀螺, 取均值作为零点
- * @note  采样间隔 10ms, 总耗时约 2.5s。需保持模块静止。
- *        256 次 (原 100) 提高初始零偏精度, 减小残余漂移。
- *        运行时由 ZRU 每 1000 个静止样本重新块平均零偏。
+ * @brief 静止时采样 256 次三轴陀螺，取均值作为零点
+ * @note  采样间隔 10ms，总耗时约 2.5s。需保持模块静止。
+ *        运行时由 ZRU 每 1000 个静止样本重新块平均三轴零偏。
  */
-static void icm_soft_calibrate_z(void)
+static void icm_soft_calibrate_gyro(void)
 {
-    uint16_t const calibration_samples = 256;
-    float gz_sum = 0.0f;
+    const uint16_t calibration_samples = 256;
+    uint8_t data[6];
+    float gx_sum = 0.0f, gy_sum = 0.0f, gz_sum = 0.0f;
+    uint16_t valid_samples = 0;
 
     for (uint16_t i = 0; i < calibration_samples; i++) {
-        int16_t gz = ((int16_t)icm_read_reg(ICM20602_GYRO_ZOUT_H) << 8)
-                     | icm_read_reg(ICM20602_GYRO_ZOUT_L);
-        gz_sum += (float)gz;
+        if (i2c0_read(ICM20602_ADDR, ICM20602_GYRO_XOUT_H, 6, data) == 0) {
+            int16_t gx_raw = ((int16_t)data[0] << 8) | data[1];
+            int16_t gy_raw = ((int16_t)data[2] << 8) | data[3];
+            int16_t gz_raw = ((int16_t)data[4] << 8) | data[5];
+            gx_sum += (float)gx_raw;
+            gy_sum += (float)gy_raw;
+            gz_sum += (float)gz_raw;
+            valid_samples++;
+        }
         delay_ms(10);
     }
-    gyro_zero_z = gz_sum / calibration_samples;
+
+    if (valid_samples > 0U) {
+        gyro_zero_x = gx_sum / (float)valid_samples;
+        gyro_zero_y = gy_sum / (float)valid_samples;
+        gyro_zero_z = gz_sum / (float)valid_samples;
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -272,7 +290,7 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
     float recipNorm;
     float qDot1, qDot2, qDot3, qDot4;
     float twoKp, twoKi;
-    float halfex = 0.0f, halfey = 0.0f;
+    float halfex = 0.0f, halfey = 0.0f, halfez = 0.0f;
     float dt;
     bool is_still = false;
 
@@ -315,9 +333,9 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
     ax = (float)acc_x * ACC_SCALE_2G;
     ay = (float)acc_y * ACC_SCALE_2G;
     az = (float)acc_z * ACC_SCALE_2G;
-    gx = (float)gyr_x * GYRO_SCALE_250;
-    gy = (float)gyr_y * GYRO_SCALE_250;
-    /* 保留 gyro_zero_z 的小数部分；强转 int16_t 会重新引入最多 1 LSB 零偏。 */
+    /* 保留三轴零偏的小数部分；强转 int16_t 会重新引入最多 1 LSB 零偏。 */
+    gx = ((float)gyr_x - gyro_zero_x) * GYRO_SCALE_250;
+    gy = ((float)gyr_y - gyro_zero_y) * GYRO_SCALE_250;
     gz = ((float)gyr_z - gyro_zero_z) * GYRO_SCALE_250;
 
     /* ── 动态 Kp/Ki: 剧烈运动 (|a|>1.2g) 时增大增益 ── */
@@ -332,52 +350,64 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
         }
     }
 
-    /* ── ZRU: 静止零角速度更新 ──
-     * 用 100ms 窗口均值而非单帧阈值区分噪声与真实慢转动：静止噪声均值
-     * 接近 0，而持续旋转具有非零均值。阈值 0.08°/s，远小于旧版 0.5°/s。
-     * 确认静止后 gz 强制为 0；每 1000 帧块平均更新 gyro_zero_z。 */
+    /* ── ZRU: 三轴静止零角速度更新 ──
+     * 用 100ms 三轴窗口均值区分噪声与真实慢转动。三维运动时任一轴
+     * 超过 2°/s 立即退出；静止时三轴角速度归零并块平均更新零偏。 */
     {
-        const float ACC_MAG_THRESHOLD = 0.05f;     /* |a|-1g 容差 (g) */
-        const float ACC_DZ_THRESHOLD  = 0.03f;     /* |a| 帧间变化 (g) */
-        const float GYRO_SPIKE_LSB    = 262.0f;    /* 2°/s：立即判运动 */
-        const float QUIET_ENTER_DPS   = 0.08f;     /* 进入静止阈值 */
-        const float QUIET_EXIT_DPS    = 0.15f;     /* 退出静止阈值（迟滞） */
+        const float ACC_MAG_THRESHOLD = 0.05f;
+        const float ACC_DZ_THRESHOLD  = 0.03f;
+        const float GYRO_SPIKE_LSB    = 262.0f;    /* 2°/s */
+        const float QUIET_ENTER_DPS   = 0.10f;
+        const float QUIET_EXIT_DPS    = 0.20f;
         const uint16_t QUIET_WINDOW   = 100;
         const uint16_t ZRU_BLOCK_SAMPLES = 1000;
 
         float acc_mag = sqrtf(ax * ax + ay * ay + az * az);
         float acc_mag_dz = fabsf(acc_mag - m_last_acc_mag);
+        float corrected_gx_lsb = (float)gyr_x - gyro_zero_x;
+        float corrected_gy_lsb = (float)gyr_y - gyro_zero_y;
         float corrected_gz_lsb = (float)gyr_z - gyro_zero_z;
         m_last_acc_mag = acc_mag;
 
         bool accel_still = (fabsf(acc_mag - 1.0f) < ACC_MAG_THRESHOLD) &&
                            (acc_mag_dz < ACC_DZ_THRESHOLD);
+        bool gyro_spike = fabsf(corrected_gx_lsb) > GYRO_SPIKE_LSB ||
+                          fabsf(corrected_gy_lsb) > GYRO_SPIKE_LSB ||
+                          fabsf(corrected_gz_lsb) > GYRO_SPIKE_LSB;
 
-        if (fabsf(corrected_gz_lsb) > GYRO_SPIKE_LSB) {
-            /* 明显旋转立即退出。 */
+        if (gyro_spike) {
             m_zru_still = false;
             m_motion_windows = 0;
-            m_quiet_sum = 0;
+            m_quiet_sum_x = 0.0f;
+            m_quiet_sum_y = 0.0f;
+            m_quiet_sum_z = 0.0f;
             m_quiet_count = 0;
         } else if (!accel_still) {
-            /* 忽略单帧振动；连续 20ms 异常才退出静止。 */
             if (m_acc_motion_count < 20U) m_acc_motion_count++;
             if (m_acc_motion_count >= 20U) m_zru_still = false;
-            m_quiet_sum = 0;
+            m_quiet_sum_x = 0.0f;
+            m_quiet_sum_y = 0.0f;
+            m_quiet_sum_z = 0.0f;
             m_quiet_count = 0;
         } else {
             m_acc_motion_count = 0;
-            m_quiet_sum += corrected_gz_lsb;
+            m_quiet_sum_x += corrected_gx_lsb;
+            m_quiet_sum_y += corrected_gy_lsb;
+            m_quiet_sum_z += corrected_gz_lsb;
             m_quiet_count++;
             if (m_quiet_count >= QUIET_WINDOW) {
-                float mean_dps = ((float)m_quiet_sum / (float)m_quiet_count) / 131.0f;
-                float abs_mean = fabsf(mean_dps);
+                float inv = 1.0f / ((float)m_quiet_count * 131.0f);
+                float mean_x = m_quiet_sum_x * inv;
+                float mean_y = m_quiet_sum_y * inv;
+                float mean_z = m_quiet_sum_z * inv;
+                float mean_norm = sqrtf(mean_x * mean_x + mean_y * mean_y +
+                                        mean_z * mean_z);
                 if (!m_zru_still) {
-                    if (abs_mean < QUIET_ENTER_DPS) {
+                    if (mean_norm < QUIET_ENTER_DPS) {
                         m_zru_still = true;
                         m_motion_windows = 0;
                     }
-                } else if (abs_mean > QUIET_EXIT_DPS) {
+                } else if (mean_norm > QUIET_EXIT_DPS) {
                     if (++m_motion_windows >= 2U) {
                         m_zru_still = false;
                         m_motion_windows = 0;
@@ -385,7 +415,9 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
                 } else {
                     m_motion_windows = 0;
                 }
-                m_quiet_sum = 0;
+                m_quiet_sum_x = 0.0f;
+                m_quiet_sum_y = 0.0f;
+                m_quiet_sum_z = 0.0f;
                 m_quiet_count = 0;
             }
         }
@@ -394,18 +426,28 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
         if (is_still) {
             if (m_stable_count < 60000U) m_stable_count++;
             if (accel_still) {
-                m_zru_sum += gyr_z;
+                m_zru_sum_x += gyr_x;
+                m_zru_sum_y += gyr_y;
+                m_zru_sum_z += gyr_z;
                 m_zru_count++;
                 if (m_zru_count >= ZRU_BLOCK_SAMPLES) {
-                    gyro_zero_z = (float)m_zru_sum / (float)m_zru_count;
-                    m_zru_sum = 0;
+                    gyro_zero_x = (float)m_zru_sum_x / (float)m_zru_count;
+                    gyro_zero_y = (float)m_zru_sum_y / (float)m_zru_count;
+                    gyro_zero_z = (float)m_zru_sum_z / (float)m_zru_count;
+                    m_zru_sum_x = 0;
+                    m_zru_sum_y = 0;
+                    m_zru_sum_z = 0;
                     m_zru_count = 0;
                 }
             }
+            gx = 0.0f;
+            gy = 0.0f;
             gz = 0.0f;
         } else {
             m_stable_count = 0;
-            m_zru_sum = 0;
+            m_zru_sum_x = 0;
+            m_zru_sum_y = 0;
+            m_zru_sum_z = 0;
             m_zru_count = 0;
         }
     }
@@ -435,20 +477,25 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
 
         halfex = (ay * halfvz - az * halfvy);
         halfey = (az * halfvx - ax * halfvz);
+        halfez = (ax * halfvy - ay * halfvx);
 
         if (twoKi > 0.0f) {
             m_integralFBx += twoKi * halfex * dt;
             m_integralFBy += twoKi * halfey * dt;
+            m_integralFBz += twoKi * halfez * dt;
             gx += m_integralFBx;
             gy += m_integralFBy;
+            gz += m_integralFBz;
         } else {
             m_integralFBx = 0.0f;
             m_integralFBy = 0.0f;
+            m_integralFBz = 0.0f;
         }
-        /* 6轴无磁力计时，加速度只能约束重力方向 (pitch/roll)，无法提供
-         * 绝对 yaw 参考。禁止 Z 轴 PI 反馈，避免误差均值持续注入 yaw。 */
+        /* 完整三轴反馈用于任意姿态下的重力对齐；静止 yaw 漂移由
+         * ZRU + held-yaw offset 抑制，而不是破坏 Mahony 误差向量。 */
         gx += twoKp * halfex;
         gy += twoKp * halfey;
+        gz += twoKp * halfez;
     }
 
     /* ── 标准 Mahony：用完成 PI 反馈后的角速度计算四元数微分 ──
@@ -460,7 +507,7 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
     qDot4 = 0.5f * ( q_w * gz + q_x * gy - q_y * gx);
 
     /* ── 四元数积分 ──
-     * Z 轴零漂由启动 256 次均值 + 运行时 ZRU 块平均和零速约束抑制。 */
+     * 三轴零漂由启动 256 次均值 + 运行时 ZRU 块平均和零速约束抑制。 */
     q_w += qDot1 * dt;
     q_x += qDot2 * dt;
     q_y += qDot3 * dt;
@@ -506,14 +553,14 @@ static int icm_mahony_solve(const uint8_t buf[14], icm_attitude_t *out)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 /**
- * @brief  初始化 ICM20602 (寄存器配置 + Z 轴陀螺软校准)
+ * @brief  初始化 ICM20602 (寄存器配置 + 三轴陀螺软校准)
  * @return 0=成功, -1=I2C 通信异常, -2=WHO_AM_I 不匹配
  *
  * @note   流程:
  *         1) I2C 总线初始化 + 死锁恢复
  *         2) 寄存器配置 (采样率 1kHz, 量程 ±250°/s + ±2g)
  *         3) WHO_AM_I 校验 (期望 0x12)
- *         4) Z 轴陀螺软校准 (256×10ms ≈ 2.56s)
+ *         4) 三轴陀螺软校准 (256×10ms ≈ 2.56s)
  *         5) 清 INT 状态残留, 标记就绪
  *
  *         初始化时间: ~1.2s (主要耗时在软校准采样)
@@ -539,8 +586,8 @@ int icm20602_init(void)
         return -2;
     }
 
-    /* ── Z 轴软校准 ── */
-    icm_soft_calibrate_z();
+    /* ── 三轴陀螺软校准 ── */
+    icm_soft_calibrate_gyro();
 
     /* ── 清 INT 状态残留 ── */
     (void)icm_read_reg(ICM20602_INT_STATUS);
