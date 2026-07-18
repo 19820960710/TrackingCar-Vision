@@ -138,7 +138,7 @@
           </Flash1>
           <bUseTDR>1</bUseTDR>
           <Flash2></Flash2>
-          <Flash3></Flash3>
+          <Flash3>"" ()</Flash3>
           <Flash4></Flash4>
           <pFcarmOut></pFcarmOut>
           <pFcarmGrp></pFcarmGrp>
@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>__MSPM0G3507__</Define>
               <Undefine></Undefine>
-              <IncludePath>../,../Component,D:\tool\CCS\mspm0_sdk_2_10_00_04\source\third_party\CMSIS\Core\Include,D:\tool\CCS\mspm0_sdk_2_10_00_04\source,.\FreeRTOS\include,.\FreeRTOS\portable\GCC\ARM_CM0,.\FreeRTOS\portable\MemMang</IncludePath>
+              <IncludePath>../,../Component,C:\ti\mspm0_sdk_2_10_00_04\source\third_party\CMSIS\Core\Include,C:\ti\mspm0_sdk_2_10_00_04\source,.\FreeRTOS\include,.\FreeRTOS\portable\GCC\ARM_CM0,.\FreeRTOS\portable\MemMang</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -374,7 +374,7 @@
             <ScatterFile>./mspm0g3507.sct</ScatterFile>
             <IncludeLibs></IncludeLibs>
             <IncludeLibsPath></IncludeLibsPath>
-            <Misc>D:\tool\CCS\mspm0_sdk_2_10_00_04\source\ti\driverlib\lib\keil\m0p\mspm0g1x0x_g3x0x\driverlib.a</Misc>
+            <Misc>C:\ti\mspm0_sdk_2_10_00_04\source\ti\driverlib\lib\keil\m0p\mspm0g1x0x_g3x0x\driverlib.a</Misc>
             <LinkerInputFile></LinkerInputFile>
             <DisabledWarnings></DisabledWarnings>
           </LDads>
@@ -384,6 +384,16 @@
         <Group>
           <GroupName>Source</GroupName>
           <Files>
+            <File>
+              <FileName>gimbal_pd_tracker.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/control/gimbal_pd_tracker.c</FilePath>
+            </File>
+            <File>
+              <FileName>gimbal_pd_tracker.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/control/gimbal_pd_tracker.h</FilePath>
+            </File>
             <File>
               <FileName>main.c</FileName>
               <FileType>1</FileType>
@@ -495,14 +505,14 @@
           <GroupName>Component/UART</GroupName>
           <Files>
             <File>
-              <FileName>uart0.c</FileName>
+              <FileName>stepper_uart.c</FileName>
               <FileType>1</FileType>
-              <FilePath>../Component/UART/uart0.c</FilePath>
+              <FilePath>../Component/UART/stepper_uart.c</FilePath>
             </File>
             <File>
-              <FileName>uart0.h</FileName>
+              <FileName>stepper_uart.h</FileName>
               <FileType>5</FileType>
-              <FilePath>../Component/UART/uart0.h</FilePath>
+              <FilePath>../Component/UART/stepper_uart.h</FilePath>
             </File>
           </Files>
         </Group>
@@ -592,6 +602,66 @@
           </Files>
         </Group>
         <Group>
+          <GroupName>Component/config</GroupName>
+          <Files>
+            <File>
+              <FileName>motor_speed_profiles.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/config/motor_speed_profiles.h</FilePath>
+            </File>
+            <File>
+              <FileName>motor_speed_profiles.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/config/motor_speed_profiles.c</FilePath>
+            </File>
+            <File>
+              <FileName>stepper_uart_config.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/config/stepper_uart_config.h</FilePath>
+            </File>
+            <File>
+              <FileName>stepper_service_config.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/config/stepper_service_config.h</FilePath>
+            </File>
+            <File>
+              <FileName>actuator_validation_config.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/config/actuator_validation_config.h</FilePath>
+            </File>
+            <File>
+              <FileName>vision_tracking_config.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/config/vision_tracking_config.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Component/zdt_x42s</GroupName>
+          <Files>
+            <File>
+              <FileName>zdt_x42s.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/zdt_x42s/zdt_x42s.c</FilePath>
+            </File>
+            <File>
+              <FileName>zdt_x42s.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/zdt_x42s/zdt_x42s.h</FilePath>
+            </File>
+            <File>
+              <FileName>stepper_motor.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/zdt_x42s/stepper_motor.c</FilePath>
+            </File>
+            <File>
+              <FileName>stepper_motor.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/zdt_x42s/stepper_motor.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
           <GroupName>Component/control</GroupName>
           <Files>
             <File>
@@ -649,6 +719,16 @@
               <FileType>5</FileType>
               <FilePath>../Component/service/speed_service.h</FilePath>
             </File>
+            <File>
+              <FileName>stepper_service.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/service/stepper_service.c</FilePath>
+            </File>
+            <File>
+              <FileName>stepper_service.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/service/stepper_service.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -678,6 +758,56 @@
               <FileName>delay.h</FileName>
               <FileType>5</FileType>
               <FilePath>../Component/common/delay.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Component/app</GroupName>
+          <Files>
+            <File>
+              <FileName>actuator_validation.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/app/actuator_validation.c</FilePath>
+            </File>
+            <File>
+              <FileName>actuator_validation.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/app/actuator_validation.h</FilePath>
+            </File>
+            <File>
+              <FileName>vision_tracking.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/app/vision_tracking.c</FilePath>
+            </File>
+            <File>
+              <FileName>vision_tracking.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/app/vision_tracking.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Component/vision</GroupName>
+          <Files>
+            <File>
+              <FileName>vision_uart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/vision/vision_uart.c</FilePath>
+            </File>
+            <File>
+              <FileName>vision_uart.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/vision/vision_uart.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Component/common</GroupName>
+          <Files>
+            <File>
+              <FileName>clock_startup.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/common/clock_startup.c</FilePath>
             </File>
           </Files>
         </Group>

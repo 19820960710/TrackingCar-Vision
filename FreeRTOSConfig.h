@@ -60,7 +60,7 @@
 #define configUSE_16_BIT_TICKS 0 /* 仅适用于8位和16位硬件 */
 
 /* 描述硬件和内存使用情况的常量 */
-#define configCPU_CLOCK_HZ ((unsigned long) 80000000)  // CPU时钟频率（Hz）
+#define configCPU_CLOCK_HZ ((unsigned long) 32000000)  // 内部 SYSOSC 启动频率（Hz）
 /* 允许的最小栈大小（以字为单位） */
 #define configMINIMAL_STACK_SIZE ((unsigned short) 128)
 #define configMAX_TASK_NAME_LEN (12)                   // 任务名称的最大长度（字符数）

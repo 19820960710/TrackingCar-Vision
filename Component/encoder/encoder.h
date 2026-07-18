@@ -2,10 +2,6 @@
  * @file    encoder.h
  * @brief   双路增量式编码器接口定义
  *
- * 编码器规格:
- *   - 每圈脉冲: 440 (ENCODER_COUNTS_PER_REV)
- *   - 减速比: 30:1 → 输出轴每圈 13200 脉冲
- *
  * 硬件映射 (实测):
  *   - 物理右轮: TIMG8 硬件 QEI (PA26=A, PA27=B)
  *   - 物理左轮: GPIO 双边沿软件解码 (PA25=A, PA14=B)
@@ -16,7 +12,6 @@
  *   encoder_init();                           // 初始化
  *   encoder_data_t data;
  *   encoder_get_data(&data);                  // 读取
- *   int32_t rpm = data.left_delta * ... ;     // 计算速度
  *   encoder_reset();                          // 零点复位
  * @endcode
  */
@@ -25,15 +20,6 @@
 
 #include <stdint.h>
 
-/** @brief 编码器每圈脉冲数 (实测标定值) */
-#define ENCODER_COUNTS_PER_REV      (440)
-
-/** @brief 左轮编码器每圈脉冲数 */
-#define ENCODER_LEFT_COUNTS_PER_REV  ENCODER_COUNTS_PER_REV
-
-/** @brief 右轮编码器每圈脉冲数 */
-#define ENCODER_RIGHT_COUNTS_PER_REV ENCODER_COUNTS_PER_REV
-
 /**
  * @brief 编码器数据快照结构体
  *
@@ -41,7 +27,7 @@
  *   - left_count / right_count: 累计计数（自初始化或上次 reset 以来的总脉冲数）
  *     正值 = 正转, 负值 = 反转
  *   - left_delta / right_delta: 自上次 encoder_get_data() 调用以来的脉冲增量
- *     用于速度计算 (delta / Δt / 每圈脉冲 × 60 = RPM)
+ *     速度换算由 control 层结合当前 motor profile 完成
  */
 typedef struct {
     int32_t left_count;    /**< 左轮累计脉冲计数 */
@@ -73,14 +59,6 @@ void encoder_reset(void);
  *         左右通道自动交换映射 (物理正确 → API 正确)
  */
 void encoder_get_data(encoder_data_t *data);
-
-/**
- * @brief  编码器增量换算为 RPM×10
- * @param  delta      编码器脉冲增量
- * @param  period_ms  累计周期 (ms)
- * @return RPM×10，使用整数运算避免浮点
- */
-int32_t encoder_delta_to_rpm10(int32_t delta, uint32_t period_ms);
 
 /**
  * @brief  检查右轮编码器 GPIO 中断是否待处理

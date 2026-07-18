@@ -50,6 +50,15 @@ void tb6612_set_right_speed(int16_t speed);
 void tb6612_set_speed(int16_t left, int16_t right);
 
 /**
+ * @brief 以逻辑 PWM 计数同时设置左右电机。
+ * @param left_duty_count  左轮 -4000..4000，符号表示方向
+ * @param right_duty_count 右轮 -4000..4000，符号表示方向
+ * @note  该接口供速度闭环使用，使 30 ms 裸机 PI 的输出尺度无需改变。
+ */
+void tb6612_set_duty_count(int32_t left_duty_count,
+                           int32_t right_duty_count);
+
+/**
  * @brief  滑行停止 (Hi-Z)
  */
 void tb6612_stop(void);

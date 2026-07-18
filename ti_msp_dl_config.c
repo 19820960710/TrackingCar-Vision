@@ -41,6 +41,7 @@
 #include "ti_msp_dl_config.h"
 
 DL_TimerG_backupConfig gQEI_ENCODER_LEFTBackup;
+DL_UART_Main_backupConfig gUART_VISIONBackup;
 
 /*
  *  ======== SYSCFG_DL_init ========
@@ -56,12 +57,14 @@ SYSCONFIG_WEAK void SYSCFG_DL_init(void)
     SYSCFG_DL_QEI_ENCODER_LEFT_init();
     SYSCFG_DL_TIMER_0_init();
     SYSCFG_DL_I2C_0_init();
-    SYSCFG_DL_UART_0_init();
+    SYSCFG_DL_UART_YAW_init();
+    SYSCFG_DL_UART_PITCH_init();
+    SYSCFG_DL_UART_VISION_init();
     /* Ensure backup structures have no valid state */
 
 	gQEI_ENCODER_LEFTBackup.backupRdy 	= false;
 
-
+	gUART_VISIONBackup.backupRdy 	= false;
 
 }
 /*
@@ -73,6 +76,7 @@ SYSCONFIG_WEAK bool SYSCFG_DL_saveConfiguration(void)
     bool retStatus = true;
 
 	retStatus &= DL_TimerG_saveConfiguration(QEI_ENCODER_LEFT_INST, &gQEI_ENCODER_LEFTBackup);
+	retStatus &= DL_UART_Main_saveConfiguration(UART_VISION_INST, &gUART_VISIONBackup);
 
     return retStatus;
 }
@@ -83,6 +87,7 @@ SYSCONFIG_WEAK bool SYSCFG_DL_restoreConfiguration(void)
     bool retStatus = true;
 
 	retStatus &= DL_TimerG_restoreConfiguration(QEI_ENCODER_LEFT_INST, &gQEI_ENCODER_LEFTBackup, false);
+	retStatus &= DL_UART_Main_restoreConfiguration(UART_VISION_INST, &gUART_VISIONBackup);
 
     return retStatus;
 }
@@ -95,7 +100,9 @@ SYSCONFIG_WEAK void SYSCFG_DL_initPower(void)
     DL_TimerG_reset(QEI_ENCODER_LEFT_INST);
     DL_TimerG_reset(TIMER_0_INST);
     DL_I2C_reset(I2C_0_INST);
-    DL_UART_Main_reset(UART_0_INST);
+    DL_UART_Main_reset(UART_YAW_INST);
+    DL_UART_Main_reset(UART_PITCH_INST);
+    DL_UART_Main_reset(UART_VISION_INST);
 
     DL_GPIO_enablePower(GPIOA);
     DL_GPIO_enablePower(GPIOB);
@@ -103,7 +110,9 @@ SYSCONFIG_WEAK void SYSCFG_DL_initPower(void)
     DL_TimerG_enablePower(QEI_ENCODER_LEFT_INST);
     DL_TimerG_enablePower(TIMER_0_INST);
     DL_I2C_enablePower(I2C_0_INST);
-    DL_UART_Main_enablePower(UART_0_INST);
+    DL_UART_Main_enablePower(UART_YAW_INST);
+    DL_UART_Main_enablePower(UART_PITCH_INST);
+    DL_UART_Main_enablePower(UART_VISION_INST);
     delay_cycles(POWER_STARTUP_DELAY);
 }
 
@@ -133,9 +142,17 @@ SYSCONFIG_WEAK void SYSCFG_DL_GPIO_init(void)
     DL_GPIO_enableHiZ(GPIO_I2C_0_IOMUX_SCL);
 
     DL_GPIO_initPeripheralOutputFunction(
-        GPIO_UART_0_IOMUX_TX, GPIO_UART_0_IOMUX_TX_FUNC);
+        GPIO_UART_YAW_IOMUX_TX, GPIO_UART_YAW_IOMUX_TX_FUNC);
     DL_GPIO_initPeripheralInputFunction(
-        GPIO_UART_0_IOMUX_RX, GPIO_UART_0_IOMUX_RX_FUNC);
+        GPIO_UART_YAW_IOMUX_RX, GPIO_UART_YAW_IOMUX_RX_FUNC);
+    DL_GPIO_initPeripheralOutputFunction(
+        GPIO_UART_PITCH_IOMUX_TX, GPIO_UART_PITCH_IOMUX_TX_FUNC);
+    DL_GPIO_initPeripheralInputFunction(
+        GPIO_UART_PITCH_IOMUX_RX, GPIO_UART_PITCH_IOMUX_RX_FUNC);
+    DL_GPIO_initPeripheralOutputFunction(
+        GPIO_UART_VISION_IOMUX_TX, GPIO_UART_VISION_IOMUX_TX_FUNC);
+    DL_GPIO_initPeripheralInputFunction(
+        GPIO_UART_VISION_IOMUX_RX, GPIO_UART_VISION_IOMUX_RX_FUNC);
 
     DL_GPIO_initDigitalOutput(LED_PIN_22_IOMUX);
 
@@ -449,12 +466,12 @@ SYSCONFIG_WEAK void SYSCFG_DL_I2C_0_init(void) {
 
 }
 
-static const DL_UART_Main_ClockConfig gUART_0ClockConfig = {
+static const DL_UART_Main_ClockConfig gUART_YAWClockConfig = {
     .clockSel    = DL_UART_MAIN_CLOCK_BUSCLK,
     .divideRatio = DL_UART_MAIN_CLOCK_DIVIDE_RATIO_1
 };
 
-static const DL_UART_Main_Config gUART_0Config = {
+static const DL_UART_Main_Config gUART_YAWConfig = {
     .mode        = DL_UART_MAIN_MODE_NORMAL,
     .direction   = DL_UART_MAIN_DIRECTION_TX_RX,
     .flowControl = DL_UART_MAIN_FLOW_CONTROL_NONE,
@@ -463,25 +480,95 @@ static const DL_UART_Main_Config gUART_0Config = {
     .stopBits    = DL_UART_MAIN_STOP_BITS_ONE
 };
 
-SYSCONFIG_WEAK void SYSCFG_DL_UART_0_init(void)
+SYSCONFIG_WEAK void SYSCFG_DL_UART_YAW_init(void)
 {
-    DL_UART_Main_setClockConfig(UART_0_INST, (DL_UART_Main_ClockConfig *) &gUART_0ClockConfig);
+    DL_UART_Main_setClockConfig(UART_YAW_INST, (DL_UART_Main_ClockConfig *) &gUART_YAWClockConfig);
 
-    DL_UART_Main_init(UART_0_INST, (DL_UART_Main_Config *) &gUART_0Config);
+    DL_UART_Main_init(UART_YAW_INST, (DL_UART_Main_Config *) &gUART_YAWConfig);
     /*
      * Configure baud rate by setting oversampling and baud rate divisors.
      *  Target baud rate: 115200
      *  Actual baud rate: 115190.78
      */
-    DL_UART_Main_setOversampling(UART_0_INST, DL_UART_OVERSAMPLING_RATE_16X);
-    DL_UART_Main_setBaudRateDivisor(UART_0_INST, UART_0_IBRD_40_MHZ_115200_BAUD, UART_0_FBRD_40_MHZ_115200_BAUD);
+    DL_UART_Main_setOversampling(UART_YAW_INST, DL_UART_OVERSAMPLING_RATE_16X);
+    DL_UART_Main_setBaudRateDivisor(UART_YAW_INST, UART_YAW_IBRD_40_MHZ_115200_BAUD, UART_YAW_FBRD_40_MHZ_115200_BAUD);
 
 
     /* Configure Interrupts */
-    DL_UART_Main_enableInterrupt(UART_0_INST,
+    DL_UART_Main_enableInterrupt(UART_YAW_INST,
                                  DL_UART_MAIN_INTERRUPT_RX);
 
 
-    DL_UART_Main_enable(UART_0_INST);
+    DL_UART_Main_enable(UART_YAW_INST);
+}
+static const DL_UART_Main_ClockConfig gUART_PITCHClockConfig = {
+    .clockSel    = DL_UART_MAIN_CLOCK_BUSCLK,
+    .divideRatio = DL_UART_MAIN_CLOCK_DIVIDE_RATIO_1
+};
+
+static const DL_UART_Main_Config gUART_PITCHConfig = {
+    .mode        = DL_UART_MAIN_MODE_NORMAL,
+    .direction   = DL_UART_MAIN_DIRECTION_TX_RX,
+    .flowControl = DL_UART_MAIN_FLOW_CONTROL_NONE,
+    .parity      = DL_UART_MAIN_PARITY_NONE,
+    .wordLength  = DL_UART_MAIN_WORD_LENGTH_8_BITS,
+    .stopBits    = DL_UART_MAIN_STOP_BITS_ONE
+};
+
+SYSCONFIG_WEAK void SYSCFG_DL_UART_PITCH_init(void)
+{
+    DL_UART_Main_setClockConfig(UART_PITCH_INST, (DL_UART_Main_ClockConfig *) &gUART_PITCHClockConfig);
+
+    DL_UART_Main_init(UART_PITCH_INST, (DL_UART_Main_Config *) &gUART_PITCHConfig);
+    /*
+     * Configure baud rate by setting oversampling and baud rate divisors.
+     *  Target baud rate: 115200
+     *  Actual baud rate: 115190.78
+     */
+    DL_UART_Main_setOversampling(UART_PITCH_INST, DL_UART_OVERSAMPLING_RATE_16X);
+    DL_UART_Main_setBaudRateDivisor(UART_PITCH_INST, UART_PITCH_IBRD_40_MHZ_115200_BAUD, UART_PITCH_FBRD_40_MHZ_115200_BAUD);
+
+
+    /* Configure Interrupts */
+    DL_UART_Main_enableInterrupt(UART_PITCH_INST,
+                                 DL_UART_MAIN_INTERRUPT_RX);
+
+
+    DL_UART_Main_enable(UART_PITCH_INST);
+}
+static const DL_UART_Main_ClockConfig gUART_VISIONClockConfig = {
+    .clockSel    = DL_UART_MAIN_CLOCK_BUSCLK,
+    .divideRatio = DL_UART_MAIN_CLOCK_DIVIDE_RATIO_1
+};
+
+static const DL_UART_Main_Config gUART_VISIONConfig = {
+    .mode        = DL_UART_MAIN_MODE_NORMAL,
+    .direction   = DL_UART_MAIN_DIRECTION_TX_RX,
+    .flowControl = DL_UART_MAIN_FLOW_CONTROL_NONE,
+    .parity      = DL_UART_MAIN_PARITY_NONE,
+    .wordLength  = DL_UART_MAIN_WORD_LENGTH_8_BITS,
+    .stopBits    = DL_UART_MAIN_STOP_BITS_ONE
+};
+
+SYSCONFIG_WEAK void SYSCFG_DL_UART_VISION_init(void)
+{
+    DL_UART_Main_setClockConfig(UART_VISION_INST, (DL_UART_Main_ClockConfig *) &gUART_VISIONClockConfig);
+
+    DL_UART_Main_init(UART_VISION_INST, (DL_UART_Main_Config *) &gUART_VISIONConfig);
+    /*
+     * Configure baud rate by setting oversampling and baud rate divisors.
+     *  Target baud rate: 115200
+     *  Actual baud rate: 115190.78
+     */
+    DL_UART_Main_setOversampling(UART_VISION_INST, DL_UART_OVERSAMPLING_RATE_16X);
+    DL_UART_Main_setBaudRateDivisor(UART_VISION_INST, UART_VISION_IBRD_80_MHZ_115200_BAUD, UART_VISION_FBRD_80_MHZ_115200_BAUD);
+
+
+    /* Configure Interrupts */
+    DL_UART_Main_enableInterrupt(UART_VISION_INST,
+                                 DL_UART_MAIN_INTERRUPT_RX);
+
+
+    DL_UART_Main_enable(UART_VISION_INST);
 }
 

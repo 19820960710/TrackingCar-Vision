@@ -1,172 +1,171 @@
+/* ============================================================================
+ *   闲鱼定制 小研分享屋
+ *   任何非闲鱼小研分享屋出售的均为盗版
+ *   正式比赛代码绑定机器绑定芯片，任何二手出售均无效
+ *   请认准正版
+ * ============================================================================ */
+
 /**
- * @file    speed_service.c
- * @brief   速度环适配层实现：FreeRTOS 队列 + 编码器读取 + TB6612 输出。
- *
- * @details 分层原则——纯算法在 speed_loop_core 中，本文件负责 RTOS 适配与硬件 I/O：
- *          - 管理速度目标/状态队列（模块私有句柄，外部通过 setter/getter 访问）；
- *          - 10ms 节拍入口读编码器增量，累计到 50ms 由算法核心做 PID；
- *          - 核心 update 返回 true 时输出 PWM 到 TB6612；
- *          - 目标为 0/0 时核心立即停止并返回制动请求。
- *
- *          数据流（每 10ms）：
- *          speed_service_step_10ms()
- *            ├─ 取队列最新目标 → speed_loop_core_set_target()
- *            ├─ 读编码器增量 → speed_loop_core_update()
- *            │    └─ 满 50ms 时：PID → PWM → tb6612_set_speed()
- *            └─ 发布速度状态快照到队列
+ * @file speed_service.c
+ * @brief 速度核心与 FreeRTOS 队列、编码器、TB6612 之间的适配。
  */
 #include "service/speed_service.h"
+
+#include "FreeRTOS.h"
+#include "queue.h"
+#include "config/motor_speed_profiles.h"
 #include "control/speed_loop_core.h"
 #include "encoder/encoder.h"
 #include "tb6612/tb6612.h"
-#include "FreeRTOS.h"
-#include "queue.h"
+
 #include <stddef.h>
 
-/**
- * @brief  速度目标消息结构体（模块内部使用，不暴露给外部）。
- */
 typedef struct {
-    int32_t left_rpm;            /* 左轮目标 RPM */
-    int32_t right_rpm;           /* 右轮目标 RPM */
-    bool low_speed_ff_enable;    /* yaw 环请求启用低速前馈 */
+    float left_mm_s;
+    float right_mm_s;
 } speed_target_msg_t;
 
-static QueueHandle_t g_speed_target_queue = NULL;  /* 目标队列（长度 1，覆盖写） */
-static QueueHandle_t g_speed_state_queue = NULL;   /* 状态队列（长度 1，覆盖写） */
-static speed_loop_core_t g_speed_core;             /* 速度环纯算法核心单例 */
-static bool g_low_speed_ff_enable = false;         /* 当前前馈使能状态，由 yaw 环设置 */
+static QueueHandle_t g_speed_target_queue = NULL;
+static QueueHandle_t g_speed_state_queue = NULL;
+static speed_loop_core_t g_speed_core;
 
+static speed_loop_config_t g_active_speed_config;
 
-/**
- * @brief  从算法核心取当前输出并发布状态快照到队列。
- *         每次 step_10ms 末尾调用，确保下游（OLED/等待接口）能读到最新状态。
- */
-static void speed_service_publish_snapshot(void)
+static void build_control_config(const motor_speed_profile_t *profile,
+                                 speed_loop_config_t *config)
+{
+    speed_loop_config_t reset = {0};
+    *config = reset;
+
+    config->motor[SPEED_LOOP_SIDE_LEFT].kp =
+        profile->pid[MOTOR_PROFILE_SIDE_LEFT].kp;
+    config->motor[SPEED_LOOP_SIDE_LEFT].ki =
+        profile->pid[MOTOR_PROFILE_SIDE_LEFT].ki;
+    config->motor[SPEED_LOOP_SIDE_LEFT].kd =
+        profile->pid[MOTOR_PROFILE_SIDE_LEFT].kd;
+    config->motor[SPEED_LOOP_SIDE_LEFT].integral_limit =
+        profile->pid[MOTOR_PROFILE_SIDE_LEFT].integral_limit;
+    config->motor[SPEED_LOOP_SIDE_LEFT].counts_per_wheel_rev =
+        profile->output_counts_per_wheel_rev[MOTOR_PROFILE_SIDE_LEFT];
+
+    config->motor[SPEED_LOOP_SIDE_RIGHT].kp =
+        profile->pid[MOTOR_PROFILE_SIDE_RIGHT].kp;
+    config->motor[SPEED_LOOP_SIDE_RIGHT].ki =
+        profile->pid[MOTOR_PROFILE_SIDE_RIGHT].ki;
+    config->motor[SPEED_LOOP_SIDE_RIGHT].kd =
+        profile->pid[MOTOR_PROFILE_SIDE_RIGHT].kd;
+    config->motor[SPEED_LOOP_SIDE_RIGHT].integral_limit =
+        profile->pid[MOTOR_PROFILE_SIDE_RIGHT].integral_limit;
+    config->motor[SPEED_LOOP_SIDE_RIGHT].counts_per_wheel_rev =
+        profile->output_counts_per_wheel_rev[MOTOR_PROFILE_SIDE_RIGHT];
+
+    config->wheel_circumference_mm =
+        motor_speed_profile_wheel_circumference_mm(profile);
+    config->filter_alpha = profile->speed_filter_alpha;
+    config->direction_change_stop_mm_s =
+        profile->direction_change_stop_mm_s;
+    config->sample_period_ms = profile->sample_period_ms;
+    config->control_period_ms = profile->control_period_ms;
+    config->pwm_logical_max = profile->pwm_logical_max;
+}
+
+static void publish_snapshot(void)
 {
     speed_loop_core_output_t output = {0};
-    speed_loop_core_get_output(&g_speed_core, &output);
-
     speed_service_state_t state = {0};
-    state.left_rpm = output.left_rpm;
-    state.right_rpm = output.right_rpm;
-    state.left_target_rpm = output.left_target_rpm;
-    state.right_target_rpm = output.right_target_rpm;
+
+    speed_loop_core_get_output(&g_speed_core, &output);
+    state.left_speed_mm_s = output.left_speed_mm_s;
+    state.right_speed_mm_s = output.right_speed_mm_s;
+    state.left_target_mm_s = output.left_target_mm_s;
+    state.right_target_mm_s = output.right_target_mm_s;
+    state.left_pwm_duty_count = output.left_pwm_duty_count;
+    state.right_pwm_duty_count = output.right_pwm_duty_count;
     state.stopped = output.stopped;
     (void)xQueueOverwrite(g_speed_state_queue, &state);
 }
 
-
 bool speed_service_init(void)
 {
-    /* 创建目标/状态队列，长度 1，覆盖写模式（只保留最新值，不累积） */
+    if (!motor_speed_profile_is_usable(MOTOR_SPEED_ACTIVE_PROFILE) ||
+        (MOTOR_SPEED_ACTIVE_PROFILE->sample_period_ms !=
+         SPEED_SERVICE_SAMPLE_PERIOD_MS)) {
+        return false;
+    }
     if (g_speed_target_queue == NULL) {
         g_speed_target_queue = xQueueCreate(1, sizeof(speed_target_msg_t));
     }
     if (g_speed_state_queue == NULL) {
         g_speed_state_queue = xQueueCreate(1, sizeof(speed_service_state_t));
     }
-    if (g_speed_target_queue == NULL || g_speed_state_queue == NULL) {
+    if ((g_speed_target_queue == NULL) || (g_speed_state_queue == NULL)) {
         return false;
     }
 
-    g_low_speed_ff_enable = false;
-    speed_loop_core_init(&g_speed_core);
+    build_control_config(MOTOR_SPEED_ACTIVE_PROFILE, &g_active_speed_config);
+    speed_loop_core_init(&g_speed_core, &g_active_speed_config);
     encoder_reset();
-    speed_service_publish_snapshot();   /* 发布初始"已停稳"快照 */
+    publish_snapshot();
     return true;
 }
 
-
-bool speed_service_set_target_with_ff(int32_t left_rpm,
-                                      int32_t right_rpm,
-                                      bool low_speed_ff_enable)
+bool speed_service_set_target_mm_s(float left_mm_s, float right_mm_s)
 {
-    speed_target_msg_t target = {0};
+    speed_target_msg_t target = {left_mm_s, right_mm_s};
 
     if (g_speed_target_queue == NULL) {
         return false;
     }
-    target.left_rpm = left_rpm;
-    target.right_rpm = right_rpm;
-    target.low_speed_ff_enable = low_speed_ff_enable;
-    return (xQueueOverwrite(g_speed_target_queue, &target) == pdPASS);
+    return xQueueOverwrite(g_speed_target_queue, &target) == pdPASS;
 }
-
-
-bool speed_service_set_target(int32_t left_rpm, int32_t right_rpm)
-{
-    /* 应用层公开接口：默认关闭 yaw 专用低速前馈 */
-    return speed_service_set_target_with_ff(left_rpm, right_rpm, false);
-}
-
 
 void speed_service_step_10ms(void)
 {
-    /* ────── 1. 取最新速度目标 ────── */
-    /* 如果队列有新的目标值，取出并喂给算法核心。
-     * speed_loop_core_set_target() 在目标为 0/0 时立即停止并返回 true，
-     * 此时需要调用 tb6612_brake() 做电机短接制动。 */
     speed_target_msg_t new_target;
-    if (g_speed_target_queue != NULL &&
-        xQueueReceive(g_speed_target_queue, &new_target, 0) == pdPASS) {
-        g_low_speed_ff_enable = new_target.low_speed_ff_enable;
-        if (speed_loop_core_set_target(&g_speed_core,
-                                       new_target.left_rpm,
-                                       new_target.right_rpm)) {
-            /* 目标为 0/0：立即制动并发布状态，不再走下面的采样+计算 */
+    encoder_data_t encoder;
+    speed_loop_core_output_t output = {0};
+
+    if ((g_speed_target_queue != NULL) &&
+        (xQueueReceive(g_speed_target_queue, &new_target, 0) == pdPASS)) {
+        speed_loop_core_set_target_mm_s(&g_speed_core,
+                                        new_target.left_mm_s,
+                                        new_target.right_mm_s);
+        if ((new_target.left_mm_s == 0.0f) &&
+            (new_target.right_mm_s == 0.0f)) {
             tb6612_brake();
-            speed_service_publish_snapshot();
         }
     }
 
-    /* ────── 2. 10ms 编码器采样 ────── */
-    /* 读取左右编码器增量（delta），喂给算法核心。
-     * 核心内部累计到 50ms 才执行 PID，提前返回 false。 */
-    encoder_data_t encoder;
     encoder_get_data(&encoder);
-
-    speed_loop_core_output_t output = {0};
-    if (speed_loop_core_update(&g_speed_core,
-                               encoder.left_delta,
-                               encoder.right_delta,
-                               SPEED_LOOP_CORE_SAMPLE_PERIOD_MS,
-                               ENCODER_COUNTS_PER_REV,
-                               g_low_speed_ff_enable,
-                               &output)) {
-        /* ────── 3. 满 50ms 窗口：核心已完成 PID ────── */
+    if (speed_loop_core_update_sample(&g_speed_core,
+                                      encoder.left_delta,
+                                      encoder.right_delta,
+                                      &output)) {
         if (output.brake) {
-            /* 核心要求制动（目标 0/0 且已完全停稳） */
             tb6612_brake();
         } else {
-            /* 正常输出 PWM：
-             * tb6612_set_speed(right_pwm, left_pwm) 参数顺序：
-             * 第 1 个 = 右轮，第 2 个 = 左轮 */
-            tb6612_set_speed((int16_t)output.right_pwm,
-                             (int16_t)output.left_pwm);
+            tb6612_set_duty_count(
+                output.left_pwm_duty_count *
+                    MOTOR_SPEED_ACTIVE_PROFILE->drive_direction_sign[
+                        MOTOR_PROFILE_SIDE_LEFT],
+                output.right_pwm_duty_count *
+                    MOTOR_SPEED_ACTIVE_PROFILE->drive_direction_sign[
+                        MOTOR_PROFILE_SIDE_RIGHT]);
         }
     }
-
-    /* ────── 4. 发布最新状态快照（供下游 OLED/等待接口使用） ────── */
-    speed_service_publish_snapshot();
+    publish_snapshot();
 }
-
 
 bool speed_service_get_state(speed_service_state_t *out)
 {
-    if (g_speed_state_queue == NULL || out == NULL ||
-        xQueuePeek(g_speed_state_queue, out, 0) != pdPASS) {
+    if ((g_speed_state_queue == NULL) || (out == NULL)) {
         return false;
     }
-    return true;
+    return xQueuePeek(g_speed_state_queue, out, 0) == pdPASS;
 }
-
 
 bool speed_service_wheels_stopped_snapshot(void)
 {
     speed_service_state_t state = {0};
-    if (!speed_service_get_state(&state)) {
-        return false;
-    }
-    return state.stopped;
+    return speed_service_get_state(&state) && state.stopped;
 }

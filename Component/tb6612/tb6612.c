@@ -17,13 +17,13 @@
  *   |  1   |  1   |  X   | 短接制动       |
  *
  *   ── 硬件接线 ──
- *   PWMA  (左电机) → PA12 (TIMG0_CCP0, PWM 通道 0)
+ *   PWMA  (物理右电机) → PA12 (TIMG0_CCP0, PWM 通道 0)
  *   AIN2             → PB19
  *   AIN1             → PB17
  *   STBY             → 已接 +5V (代码不控制, 始终使能)
  *   BIN1             → PA16
  *   BIN2             → PB24
- *   PWMB  (右电机) → PA13 (TIMG0_CCP1, PWM 通道 1)
+ *   PWMB  (物理左电机) → PA13 (TIMG0_CCP1, PWM 通道 1)
  *
  *   ── PWM 配置 ──
  *   定时器: TIMG0 (SysConfig 名 "PWM_TB6612")
@@ -54,26 +54,27 @@
 
 /** @brief PWM 周期计数值 (40MHz / 2000 = 20kHz) */
 #define PWM_PERIOD     2000
+#define DUTY_COUNT_MAX 4000
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  引脚宏 (由 SysConfig GPIO_TB6612 映射)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ── 方向脚 (通道 A = 物理左电机) ── */
+/* ── 方向脚 (通道 A = 物理右电机) ── */
 #define AIN1_PORT      GPIO_TB6612_PIN_AIN1_PORT
 #define AIN1_PIN       GPIO_TB6612_PIN_AIN1_PIN
 #define AIN2_PORT      GPIO_TB6612_PIN_AIN2_PORT
 #define AIN2_PIN       GPIO_TB6612_PIN_AIN2_PIN
 
-/* ── 方向脚 (通道 B = 物理右电机) ── */
+/* ── 方向脚 (通道 B = 物理左电机) ── */
 #define BIN1_PORT      GPIO_TB6612_PIN_BIN1_PORT
 #define BIN1_PIN       GPIO_TB6612_PIN_BIN1_PIN
 #define BIN2_PORT      GPIO_TB6612_PIN_BIN2_PORT
 #define BIN2_PIN       GPIO_TB6612_PIN_BIN2_PIN
 
 /* ── PWM 通道索引 (TIMG0) ── */
-#define PWM_C0_IDX     GPIO_PWM_TB6612_C0_IDX   /* CC0 = PA12, 左电机 */
-#define PWM_C1_IDX     GPIO_PWM_TB6612_C1_IDX   /* CC1 = PA13, 右电机 */
+#define PWM_C0_IDX     GPIO_PWM_TB6612_C0_IDX   /* CC0 = PA12, 物理右轮 */
+#define PWM_C1_IDX     GPIO_PWM_TB6612_C1_IDX   /* CC1 = PA13, 物理左轮 */
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  内部辅助: 方向设置
@@ -164,6 +165,41 @@ static void set_motor(const char motor, int16_t speed)
     }
 }
 
+static void set_motor_duty_count(const char motor, int32_t duty_count)
+{
+    uint32_t abs_duty;
+    uint32_t cc_val;
+
+    if (duty_count > DUTY_COUNT_MAX) {
+        duty_count = DUTY_COUNT_MAX;
+    } else if (duty_count < -DUTY_COUNT_MAX) {
+        duty_count = -DUTY_COUNT_MAX;
+    }
+    abs_duty = (duty_count >= 0) ? (uint32_t)duty_count :
+                                   (uint32_t)(-duty_count);
+    cc_val = PWM_PERIOD * (DUTY_COUNT_MAX - abs_duty) / DUTY_COUNT_MAX;
+
+    if (motor == 'A') {
+        if (duty_count > 0) {
+            set_dir_a(1U, 0U);
+        } else if (duty_count < 0) {
+            set_dir_a(0U, 1U);
+        } else {
+            set_dir_a(0U, 0U);
+        }
+        DL_TimerG_setCaptureCompareValue(PWM_TB6612_INST, cc_val, PWM_C0_IDX);
+    } else {
+        if (duty_count > 0) {
+            set_dir_b(1U, 0U);
+        } else if (duty_count < 0) {
+            set_dir_b(0U, 1U);
+        } else {
+            set_dir_b(0U, 0U);
+        }
+        DL_TimerG_setCaptureCompareValue(PWM_TB6612_INST, cc_val, PWM_C1_IDX);
+    }
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
  *  公开接口
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -195,7 +231,7 @@ void tb6612_init(void)
  */
 void tb6612_set_left_speed(int16_t speed)
 {
-    set_motor('A', speed);
+    set_motor('B', speed);
 }
 
 /**
@@ -204,7 +240,7 @@ void tb6612_set_left_speed(int16_t speed)
  */
 void tb6612_set_right_speed(int16_t speed)
 {
-    set_motor('B', speed);
+    set_motor('A', speed);
 }
 
 /**
@@ -215,8 +251,15 @@ void tb6612_set_right_speed(int16_t speed)
  */
 void tb6612_set_speed(int16_t left, int16_t right)
 {
-    set_motor('A', left);
-    set_motor('B', right);
+    set_motor('B', left);
+    set_motor('A', right);
+}
+
+void tb6612_set_duty_count(int32_t left_duty_count,
+                           int32_t right_duty_count)
+{
+    set_motor_duty_count('B', left_duty_count);
+    set_motor_duty_count('A', right_duty_count);
 }
 
 /**

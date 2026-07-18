@@ -2,11 +2,6 @@
  * @file    encoder.c
  * @brief   双路增量式编码器读取模块 (MSPM0G3507)
  * @note
- *   ── 编码器规格 ──
- *   电机每圈输出: 440 脉冲 (ENCODER_COUNTS_PER_REV)
- *   电机减速比: 30:1 (电机 30 转 = 输出轴 1 转)
- *   输出轴每圈: 440 × 30 = 13200 脉冲
- *
  *   ── 硬件映射 ──
  *   物理右轮: TIMG8 硬件 QEI (正交编码器接口)
  *     A 相 = PA26 (TIMG8_CCP0), B 相 = PA27 (TIMG8_CCP1)
@@ -233,18 +228,6 @@ void encoder_get_data(encoder_data_t *data)
     /* 更新上次报告值 */
     g_left_last_report  = qei_now;
     g_right_last_report = gpio_now;
-}
-
-/**
- * @brief  编码器增量换算为 RPM×10
- */
-int32_t encoder_delta_to_rpm10(int32_t delta, uint32_t period_ms)
-{
-    if (period_ms == 0U) {
-        return 0;
-    }
-    return (int32_t)(((int64_t)delta * 600000) /
-                     ((int64_t)ENCODER_COUNTS_PER_REV * period_ms));
 }
 
 /**

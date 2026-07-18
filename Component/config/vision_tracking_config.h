@@ -1,0 +1,26 @@
+/**
+ * @file vision_tracking_config.h
+ * @brief Tunable MaixCAM-to-gimbal tracking parameters.
+ */
+#ifndef VISION_TRACKING_CONFIG_H
+#define VISION_TRACKING_CONFIG_H
+
+#define VISION_TRACKING_ENABLED                 1U
+#define VISION_TRACKING_TASK_PERIOD_MS          1U
+#define VISION_TRACKING_COMMAND_PERIOD_MS      25U
+#define VISION_TRACKING_TELEMETRY_PERIOD_MS    20U
+#define VISION_TRACKING_DEADBAND_PIXELS         4
+#define VISION_TRACKING_YAW_KP_PULSES_PER_PIXEL 0.20f
+#define VISION_TRACKING_YAW_KD_PULSE_SECONDS_PER_PIXEL 0.008f
+#define VISION_TRACKING_PITCH_KP_PULSES_PER_PIXEL 0.40f
+#define VISION_TRACKING_PITCH_KD_PULSE_SECONDS_PER_PIXEL 0.005f
+#define VISION_TRACKING_YAW_MAX_PULSES          400
+#define VISION_TRACKING_PITCH_MAX_PULSES        400
+#define VISION_TRACKING_SPEED_RPM               60U
+#define VISION_TRACKING_ACCELERATION            20U
+
+/* Preserves the verified polarity from tracking_vision. */
+#define VISION_TRACKING_YAW_POSITIVE_IS_CW     false
+#define VISION_TRACKING_PITCH_POSITIVE_IS_CW    true
+
+#endif /* VISION_TRACKING_CONFIG_H */

@@ -27,6 +27,8 @@ const TIMER  = scripting.addModule("/ti/driverlib/TIMER", {}, false);
 const TIMER1 = TIMER.addInstance();
 const UART   = scripting.addModule("/ti/driverlib/UART", {}, false);
 const UART1  = UART.addInstance();
+const UART2  = UART.addInstance();
+const UART3  = UART.addInstance();
 
 /**
  * Write custom configuration values to the imported modules.
@@ -163,13 +165,33 @@ TIMER1.timerMode          = "PERIODIC";
 TIMER1.interrupts         = ["ZERO"];
 TIMER1.peripheral.$assign = "TIMG12";
 
-UART1.$name                    = "UART_0";
+UART1.$name                    = "UART_YAW";
 UART1.enabledInterrupts        = ["RX"];
 UART1.targetBaudRate           = 115200;
-UART1.peripheral.rxPin.$assign = "PA11";
-UART1.peripheral.txPin.$assign = "PA10";
+UART1.peripheral.$assign       = "UART2";
+UART1.peripheral.rxPin.$assign = "PA24";
+UART1.peripheral.txPin.$assign = "PA23";
 UART1.txPinConfig.$name        = "ti_driverlib_gpio_GPIOPinGeneric0";
 UART1.rxPinConfig.$name        = "ti_driverlib_gpio_GPIOPinGeneric1";
+
+UART2.$name                    = "UART_PITCH";
+UART2.enabledInterrupts        = ["RX"];
+UART2.targetBaudRate           = 115200;
+UART2.peripheral.$assign       = "UART1";
+UART2.peripheral.rxPin.$assign = "PB7";
+UART2.peripheral.txPin.$assign = "PB6";
+UART2.txPinConfig.$name        = "ti_driverlib_gpio_GPIOPinGeneric10";
+UART2.rxPinConfig.$name        = "ti_driverlib_gpio_GPIOPinGeneric11";
+
+/* MaixCAM target observations: UART3 RX=PB3, TX=PB2. */
+UART3.$name                    = "UART_VISION";
+UART3.enabledInterrupts        = ["RX"];
+UART3.targetBaudRate           = 115200;
+UART3.peripheral.$assign       = "UART3";
+UART3.peripheral.rxPin.$assign = "PB3";
+UART3.peripheral.txPin.$assign = "PB2";
+UART3.txPinConfig.$name        = "ti_driverlib_gpio_GPIOPinGeneric12";
+UART3.rxPinConfig.$name        = "ti_driverlib_gpio_GPIOPinGeneric13";
 
 /**
  * Pinmux solution for unlocked pins/peripherals. This ensures that minor changes to the automatic solver in a future
@@ -182,4 +204,3 @@ pinFunction4.peripheral.hfxOutPin.$suggestSolution = "PA6";
 Board.peripheral.$suggestSolution                  = "DEBUGSS";
 Board.peripheral.swclkPin.$suggestSolution         = "PA20";
 Board.peripheral.swdioPin.$suggestSolution         = "PA19";
-UART1.peripheral.$suggestSolution                  = "UART0";

@@ -1,3 +1,10 @@
+/* ============================================================================
+ *   闲鱼定制 小研分享屋
+ *   任何非闲鱼小研分享屋出售的均为盗版
+ *   正式比赛代码绑定机器绑定芯片，任何二手出售均无效
+ *   请认准正版
+ * ============================================================================ */
+
 /**
  * @file    app_tasks.c
  * @brief   FreeRTOS 任务入口、ISR 分发与应用层 API 转发。
@@ -29,7 +36,15 @@
 #include "common/i2c_bus.h"     /* i2c0_irq_handler (I2C 异步读中断) */
 #include "service/attitude_service.h"
 #include "service/yaw_loop_service.h"
+#include "service/stepper_service.h"
 #include "common/util.h"
+#include "config/motor_speed_profiles.h"
+#include "config/actuator_validation_config.h"
+#include "config/board_feature_config.h"
+#include "app/actuator_validation.h"
+#include "config/vision_tracking_config.h"
+#include "app/vision_tracking.h"
+#include "vision/vision_uart.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -45,16 +60,15 @@ static TaskHandle_t g_speed_loop_task_handle = NULL;  /* 由 yaw_loop_task 通�
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 /**
- * @brief  设置左右轮目标速度 (RPM)。
- * @param  left_rpm  左轮目标 RPM（正数=前进，负数=后退，0=停止）
- * @param  right_rpm 右轮目标 RPM
+ * @brief  设置左右轮目标线速度 (mm/s)。
+ * @param  left_mm_s  左轮目标 mm/s（正数=前进，负数=后退，0=停止）
+ * @param  right_mm_s 右轮目标 mm/s
  * @return true=目标已成功写入队列，false=队列未就绪
- * @note   本接口转发到 speed_service_set_target()，默认关闭 yaw 专用低速前馈。
- *         yaw 环运行时依赖 yaw_loop_service_set_target() 走另一条含前馈的路径。
+ * @note   本接口直接转发到以 mm/s 为唯一公共单位的 speed_service。
  */
-bool app_tasks_set_wheel_speed_target(int32_t left_rpm, int32_t right_rpm)
+bool app_tasks_set_wheel_speed_target_mm_s(float left_mm_s, float right_mm_s)
 {
-    return speed_service_set_target(left_rpm, right_rpm);
+    return speed_service_set_target_mm_s(left_mm_s, right_mm_s);
 }
 
 /**
@@ -66,6 +80,87 @@ bool app_tasks_set_wheel_speed_target(int32_t left_rpm, int32_t right_rpm)
 bool app_tasks_set_yaw_target(int32_t base_speed_rpm, int32_t target_yaw_deg10)
 {
     return yaw_loop_service_set_target(base_speed_rpm, target_yaw_deg10);
+}
+
+bool app_tasks_set_stepper_enabled(bool enabled)
+{
+    return app_tasks_set_stepper_axis_enabled(APP_STEPPER_AXIS_YAW, enabled);
+}
+
+bool app_tasks_move_stepper(const app_stepper_move_t *move)
+{
+    return app_tasks_move_stepper_axis(APP_STEPPER_AXIS_YAW, move);
+}
+
+static stepper_axis_t map_stepper_axis(app_stepper_axis_t axis)
+{
+    return (axis == APP_STEPPER_AXIS_PITCH) ? STEPPER_AXIS_PITCH :
+                                              STEPPER_AXIS_YAW;
+}
+
+bool app_tasks_set_stepper_axis_enabled(app_stepper_axis_t axis, bool enabled)
+{
+    if ((axis != APP_STEPPER_AXIS_YAW) &&
+        (axis != APP_STEPPER_AXIS_PITCH)) {
+        return false;
+    }
+    return stepper_service_set_axis_enabled(map_stepper_axis(axis), enabled);
+}
+
+bool app_tasks_move_stepper_axis(app_stepper_axis_t axis,
+                                 const app_stepper_move_t *move)
+{
+    stepper_motor_move_t command;
+
+    if ((move == NULL) ||
+        ((axis != APP_STEPPER_AXIS_YAW) &&
+         (axis != APP_STEPPER_AXIS_PITCH))) {
+        return false;
+    }
+    command.direction = (move->direction == APP_STEPPER_DIRECTION_CCW) ?
+                        ZDT_X42S_DIRECTION_CCW : ZDT_X42S_DIRECTION_CW;
+    command.speed_rpm = move->speed_rpm;
+    command.acceleration = move->acceleration;
+    command.pulse_count = move->pulse_count;
+    command.motion_mode = move->motion_mode;
+    command.sync_flag = move->sync_flag;
+    return stepper_service_move_axis(map_stepper_axis(axis), &command);
+}
+
+bool app_tasks_get_stepper_state(app_stepper_state_t *out)
+{
+    return app_tasks_get_stepper_axis_state(APP_STEPPER_AXIS_YAW, out);
+}
+
+bool app_tasks_get_stepper_axis_state(app_stepper_axis_t axis,
+                                      app_stepper_state_t *out)
+{
+    stepper_service_state_t state;
+
+    if ((out == NULL) ||
+        ((axis != APP_STEPPER_AXIS_YAW) &&
+         (axis != APP_STEPPER_AXIS_PITCH)) ||
+        !stepper_service_get_axis_state(map_stepper_axis(axis), &state)) {
+        return false;
+    }
+    out->enabled = state.enabled;
+    out->command_pending = state.command_pending;
+    out->last_tx_ok = state.last_tx_ok;
+    out->transmitted_commands = state.transmitted_commands;
+    out->last_response = (uint8_t)state.last_response;
+    return true;
+}
+
+bool app_tasks_stepper_axis_motion_reached(app_stepper_axis_t axis)
+{
+    stepper_service_state_t state;
+
+    if ((axis != APP_STEPPER_AXIS_YAW) &&
+        (axis != APP_STEPPER_AXIS_PITCH)) {
+        return false;
+    }
+    return stepper_service_get_axis_state(map_stepper_axis(axis), &state) &&
+           (state.last_response == ZDT_X42S_RESPONSE_REACHED);
 }
 
 /**
@@ -129,10 +224,10 @@ bool app_tasks_get_wheel_speed(app_wheel_speed_t *out)
     }
 
     /* 只暴露对外接口所需字段，隐藏 PWM/PID 等实现细节 */
-    out->left_rpm = speed_state.left_rpm;
-    out->right_rpm = speed_state.right_rpm;
-    out->left_target_rpm = speed_state.left_target_rpm;
-    out->right_target_rpm = speed_state.right_target_rpm;
+    out->left_speed_mm_s = speed_state.left_speed_mm_s;
+    out->right_speed_mm_s = speed_state.right_speed_mm_s;
+    out->left_target_mm_s = speed_state.left_target_mm_s;
+    out->right_target_mm_s = speed_state.right_target_mm_s;
     out->stopped = speed_state.stopped;
     return true;
 }
@@ -165,8 +260,9 @@ bool app_tasks_get_vehicle_state(app_vehicle_state_t *out)
     out->attitude_available = app_tasks_get_attitude(&out->attitude);
     out->wheel_speed_available = app_tasks_get_wheel_speed(&out->wheel_speed);
     out->yaw_status_available = app_tasks_get_yaw_status(&out->yaw);
+    out->stepper_available = app_tasks_get_stepper_state(&out->stepper);
     return (out->attitude_available || out->wheel_speed_available ||
-            out->yaw_status_available);
+            out->yaw_status_available || out->stepper_available);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -249,7 +345,7 @@ static void attitude_task(void *pvParameters)
  * @brief  yaw 角环任务（优先级 4，最高控制优先级）。
  *
  * 由 TIMER_0 10ms 中断通知唤醒，内部做 5 分频，每 50ms 执行一次 yaw PID。
- * yaw 环只计算 base_speed + turn_rpm + 前馈标志，差速换算与速度环下发
+ * yaw 环暂时计算 base_speed + turn_rpm；胶水层完成差速与 RPM->mm/s 换算，
  * 留在本胶水层完成，使 yaw 和 speed 两环可独立测试/调试。
  *
  * 每次被唤醒后都通知 speed_loop_task，保证速度环在 yaw 更新后紧随执行。
@@ -271,16 +367,21 @@ static void yaw_loop_task(void *pvParameters)
             if (yaw_loop_service_get_status(&yaw) && yaw.enabled) {
                 if (!yaw.attitude_valid) {
                     /* 姿态失效（MPU 未稳定或通信丢失）：安全停车 */
-                    (void)speed_service_set_target(0, 0);
+                    (void)speed_service_set_target_mm_s(0.0f, 0.0f);
                 } else {
                     /* 差速换算：左轮 = 基准 - 转向量，右轮 = 基准 + 转向量。
                      * 实测左正右负等效于左轮减速右轮加速，小车顺时针旋转。
                      * 若实际旋转方向相反，调换 ± 号即可。 */
                     int32_t left_cmd_rpm = yaw.base_speed_rpm - yaw.turn_rpm;
                     int32_t right_cmd_rpm = yaw.base_speed_rpm + yaw.turn_rpm;
-                    (void)speed_service_set_target_with_ff(left_cmd_rpm,
-                                                           right_cmd_rpm,
-                                                           yaw.speed_ff_enable);
+
+                    /* yaw 环暂时保留原 RPM 参数；只在跨入速度内环时显式换算。
+                     * 后续重调 yaw 环时可将其整体迁移为 mm/s。 */
+                    (void)speed_service_set_target_mm_s(
+                        motor_speed_profile_rpm_to_mm_s(
+                            MOTOR_SPEED_ACTIVE_PROFILE, (float)left_cmd_rpm),
+                        motor_speed_profile_rpm_to_mm_s(
+                            MOTOR_SPEED_ACTIVE_PROFILE, (float)right_cmd_rpm));
                 }
             }
         }
@@ -299,8 +400,8 @@ static void yaw_loop_task(void *pvParameters)
  * 负责启动 TIMER_0（10ms 硬件定时器），之后由 yaw_loop_task 的通知驱动。
  * 每次被唤醒调用 speed_service_step_10ms()，内部：
  *   1. 读编码器增量
- *   2. 累计到 50ms 窗口执行 PID
- *   3. 输出 PWM 到 TB6612
+ *   2. 累计到 30ms 窗口执行 PI
+ *   3. 输出逻辑 PWM 计数到 TB6612
  */
 static void speed_loop_task(void *pvParameters)
 {
@@ -468,7 +569,7 @@ void app_tasks_start(void)
 {
     /* 所有 service 必须全部初始化成功，否则不启动调度器 */
     if (!attitude_service_init() || !yaw_loop_service_init() ||
-        !speed_service_init()) {
+        !speed_service_init() || !stepper_service_init()) {
         while (1) {}
     }
 
@@ -482,8 +583,17 @@ void app_tasks_start(void)
                 &g_yaw_loop_task_handle);
     xTaskCreate(speed_loop_task, "SPD_LOOP", 512, NULL, 3,
                 &g_speed_loop_task_handle);
+    xTaskCreate(stepper_service_task, "STEPPER", 256, NULL, 2, NULL);
+#if ACTUATOR_VALIDATION_ENABLED
+    xTaskCreate(actuator_validation_task, "ACT_TEST", 256, NULL, 2, NULL);
+#elif VISION_TRACKING_ENABLED
+    xTaskCreate(vision_tracking_task, "VISION", 384, NULL, 3, NULL);
+#else
     xTaskCreate(yaw_key_task,    "YAW_KEY",  192, NULL, 2, NULL);
-    xTaskCreate(oled_task,       "OLED",     512, NULL, 1, NULL);
+#endif
+#if BOARD_OLED_TASK_ENABLED
+    xTaskCreate(oled_task, "OLED", 512, NULL, 1, NULL);
+#endif
 
     vTaskStartScheduler();
     /* 调度器启动失败才会走到这里 */
@@ -569,6 +679,14 @@ void TIMER_0_INST_IRQHandler(void)
     }
 
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+/**
+ * @brief UART3 receive interrupt: forward MaixCAM bytes to the vision task.
+ */
+void UART_VISION_INST_IRQHandler(void)
+{
+    vision_uart_irq_handler();
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
