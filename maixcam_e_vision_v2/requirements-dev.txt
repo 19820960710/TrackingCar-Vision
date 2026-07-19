@@ -1,0 +1,2 @@
+# Desktop-only optional dependencies. MaixCAM deployment does not install this file.
+# opencv-python
