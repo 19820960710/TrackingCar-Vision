@@ -22,12 +22,21 @@ typedef struct {
     bool last_tx_ok;
     uint32_t transmitted_commands;
     stepper_motor_response_t last_response;
+    int32_t realtime_position;
+    uint32_t position_sequence;
+    uint32_t last_response_function;
+    uint32_t last_response_code;
 } stepper_service_state_t;
 
 bool stepper_service_init(void);
 bool stepper_service_set_axis_enabled(stepper_axis_t axis, bool enabled);
+/** Discard queued commands without changing either motor's hardware state. */
+bool stepper_service_clear_pending_commands(void);
+/** Discard queued moves and immediately stop both axes without disabling. */
+bool stepper_service_stop_all(void);
 bool stepper_service_move_axis(stepper_axis_t axis,
                                const stepper_motor_move_t *move);
+bool stepper_service_request_position(stepper_axis_t axis);
 bool stepper_service_get_axis_state(stepper_axis_t axis,
                                     stepper_service_state_t *out);
 

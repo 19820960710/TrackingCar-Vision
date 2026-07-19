@@ -6,6 +6,7 @@
 #define VISION_TRACKING_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /**
  * @brief Read-only RAM snapshot, updated only by vision_tracking_task.
@@ -15,10 +16,19 @@
  * without suspending the control task.
  */
 typedef struct {
+    float yaw_kp;
+    float yaw_kd;
+    float pitch_kp;
+    float pitch_kd;
+} vision_tracking_tuning_t;
+
+typedef struct {
     uint32_t update_sequence;
     uint32_t uart_packet_count;
     uint32_t uart_parse_error_count;
     uint32_t uart_overrun_count;
+    uint32_t using_simulated_input;
+    uint32_t stimulus_sequence;
     uint32_t last_target_valid;
     uint32_t last_target_x;
     uint32_t last_target_y;
@@ -39,5 +49,7 @@ typedef struct {
 extern volatile vision_tracking_debug_t g_vision_tracking_debug;
 
 void vision_tracking_task(void *argument);
+void vision_tracking_set_control_enabled(bool enabled);
+bool vision_tracking_set_tuning(const vision_tracking_tuning_t *tuning);
 
 #endif /* VISION_TRACKING_H */

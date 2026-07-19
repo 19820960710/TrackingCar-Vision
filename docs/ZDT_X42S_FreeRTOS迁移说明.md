@@ -6,8 +6,8 @@
 
 | 轴 | MCU 外设 | TX | RX | 波特率 | 地址 |
 |---|---|---|---|---|---|
-| yaw | UART2 | PA23 | PA24 | 115200 8N1 | `0x01` |
-| pitch | UART1 | PB6 | PB7 | 115200 8N1 | `0x01` |
+| yaw | UART1 | PB6 | PB7 | 115200 8N1 | `0x01` |
+| pitch | UART2 | PA23 | PA24 | 115200 8N1 | `0x01` |
 
 TX/RX 名称均以 MCU 为视角：MCU TX 接驱动器 RX，MCU RX 接驱动器 TX，两路必须与 MCU 共地。
 
@@ -29,7 +29,7 @@ app_stepper_move_t move = {
     .speed_rpm = 30,
     .acceleration = 10,
     .pulse_count = 800,
-    .motion_mode = 0,
+    .motion_mode = ZDT_X42S_MOTION_REALTIME_RELATIVE,
     .sync_flag = 0,
 };
 

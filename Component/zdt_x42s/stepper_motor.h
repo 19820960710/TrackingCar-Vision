@@ -20,6 +20,13 @@ bool stepper_motor_init(stepper_motor_t *motor,
 bool stepper_motor_set_enabled(stepper_motor_t *motor, bool enabled);
 bool stepper_motor_move(stepper_motor_t *motor,
                         const stepper_motor_move_t *move);
+bool stepper_motor_stop(stepper_motor_t *motor, uint8_t sync_flag);
+bool stepper_motor_request_position(stepper_motor_t *motor);
+bool stepper_motor_get_position(const stepper_motor_t *motor,
+                                int32_t *position, uint32_t *sequence);
+bool stepper_motor_get_last_control_response(const stepper_motor_t *motor,
+                                             uint8_t *function,
+                                             uint8_t *response_code);
 stepper_motor_response_t stepper_motor_poll(stepper_motor_t *motor);
 stepper_motor_response_t stepper_motor_consume_response_byte(
     stepper_motor_t *motor, uint8_t byte);

@@ -12,6 +12,8 @@
 #define ZDT_X42S_MAX_SPEED_RPM          3000U
 #define ZDT_X42S_MAX_ACCELERATION_LEVEL 255U
 #define ZDT_X42S_DEFAULT_PULSES_PER_REV  3200U
+#define ZDT_X42S_MOTION_RELATIVE_TARGET     0U
+#define ZDT_X42S_MOTION_RELATIVE_CURRENT    2U
 
 typedef enum {
     ZDT_X42S_DIRECTION_CW = 0U,
@@ -23,7 +25,8 @@ typedef enum {
     ZDT_X42S_RESPONSE_ACCEPTED,
     ZDT_X42S_RESPONSE_REACHED,
     ZDT_X42S_RESPONSE_PROTECTION_ERROR,
-    ZDT_X42S_RESPONSE_PROTOCOL_ERROR
+    ZDT_X42S_RESPONSE_PROTOCOL_ERROR,
+    ZDT_X42S_RESPONSE_POSITION
 } zdt_x42s_response_t;
 
 typedef struct {
@@ -49,9 +52,14 @@ typedef struct {
 typedef struct {
     zdt_x42s_transport_t transport;
     uint8_t address;
-    uint8_t response_bytes[4];
+    uint8_t response_bytes[8];
     uint8_t response_count;
+    uint8_t response_length;
     zdt_x42s_response_t last_response;
+    int32_t realtime_position;
+    uint32_t position_sequence;
+    uint8_t last_control_function;
+    uint8_t last_control_code;
 } zdt_x42s_t;
 
 bool zdt_x42s_init(zdt_x42s_t *motor,
@@ -59,6 +67,13 @@ bool zdt_x42s_init(zdt_x42s_t *motor,
                    uint8_t address);
 bool zdt_x42s_set_enabled(zdt_x42s_t *motor, bool enabled);
 bool zdt_x42s_start_move(zdt_x42s_t *motor, const zdt_x42s_move_t *move);
+bool zdt_x42s_stop(zdt_x42s_t *motor, uint8_t sync_flag);
+bool zdt_x42s_request_position(zdt_x42s_t *motor);
+bool zdt_x42s_get_position(const zdt_x42s_t *motor, int32_t *position,
+                           uint32_t *sequence);
+bool zdt_x42s_get_last_control_response(const zdt_x42s_t *motor,
+                                        uint8_t *function,
+                                        uint8_t *response_code);
 zdt_x42s_response_t zdt_x42s_consume_response_byte(zdt_x42s_t *motor,
                                                    uint8_t byte);
 zdt_x42s_response_t zdt_x42s_poll_response(zdt_x42s_t *motor);

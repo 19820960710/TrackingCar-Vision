@@ -44,6 +44,8 @@
 #include "app/actuator_validation.h"
 #include "config/vision_tracking_config.h"
 #include "app/vision_tracking.h"
+#include "config/gimbal_autotune_config.h"
+#include "app/gimbal_autotune.h"
 #include "vision/vision_uart.h"
 #include <stdint.h>
 #include <stdbool.h>
@@ -588,6 +590,9 @@ void app_tasks_start(void)
     xTaskCreate(actuator_validation_task, "ACT_TEST", 256, NULL, 2, NULL);
 #elif VISION_TRACKING_ENABLED
     xTaskCreate(vision_tracking_task, "VISION", 384, NULL, 3, NULL);
+#if GIMBAL_AUTOTUNE_ENABLED
+    xTaskCreate(gimbal_autotune_task, "GIMBAL_AT", 384, NULL, 3, NULL);
+#endif
 #else
     xTaskCreate(yaw_key_task,    "YAW_KEY",  192, NULL, 2, NULL);
 #endif

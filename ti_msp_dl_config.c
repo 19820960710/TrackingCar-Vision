@@ -311,7 +311,7 @@ SYSCONFIG_WEAK void SYSCFG_DL_SYSCTL_init(void)
     {
         /* Toggle SYSPLL enable to re-enable SYSPLL and re-check incorrect locking */
         DL_SYSCTL_disableSYSPLL();
-        DL_SYSCTL_enableSYSPLL();
+        SYSCTL->SOCLOCK.HSCLKEN |= SYSCTL_HSCLKEN_SYSPLLEN_MASK;
 
         /* Wait until SYSPLL startup is stabilized*/
         while ((DL_SYSCTL_getClockStatus() & SYSCTL_CLKSTATUS_SYSPLLGOOD_MASK) != DL_SYSCTL_CLK_STATUS_SYSPLL_GOOD){}

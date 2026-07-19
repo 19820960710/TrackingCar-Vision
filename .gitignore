@@ -21,8 +21,13 @@ keil/*.log
 
 # Python 虚拟环境
 .venv/
+.venv*/
 __pycache__/
 *.pyc
+
+# 云台实机调参输出/临时内存快照（由本机脚本重新生成）
+gimbal-autotune-results/
+temp-mcu-memory/
 
 # Pi 本地配置/技能缓存
 .pi/

@@ -10,6 +10,8 @@
 #include "control/gimbal_pd_tracker.h"
 #include "service/stepper_service.h"
 #include "vision/vision_uart.h"
+#include "vision/vision_stimulus.h"
+#include "zdt_x42s/zdt_x42s.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -22,6 +24,29 @@ typedef struct {
 } vision_tracking_axis_t;
 
 volatile vision_tracking_debug_t g_vision_tracking_debug = {0};
+static volatile bool g_control_enabled = true;
+static volatile vision_tracking_tuning_t g_tuning = {
+    VISION_TRACKING_YAW_KP_PULSES_PER_PIXEL,
+    VISION_TRACKING_YAW_KD_PULSE_SECONDS_PER_PIXEL,
+    VISION_TRACKING_PITCH_KP_PULSES_PER_PIXEL,
+    VISION_TRACKING_PITCH_KD_PULSE_SECONDS_PER_PIXEL,
+};
+
+void vision_tracking_set_control_enabled(bool enabled)
+{
+    g_control_enabled = enabled;
+}
+
+bool vision_tracking_set_tuning(const vision_tracking_tuning_t *tuning)
+{
+    if ((tuning == NULL) || (tuning->yaw_kp < 0.0f) ||
+        (tuning->yaw_kd < 0.0f) || (tuning->pitch_kp < 0.0f) ||
+        (tuning->pitch_kd < 0.0f)) {
+        return false;
+    }
+    g_tuning = *tuning;
+    return true;
+}
 
 static bool submit_axis_move(const vision_tracking_axis_t *axis,
                              int32_t signed_pulses)
@@ -34,7 +59,7 @@ static bool submit_axis_move(const vision_tracking_axis_t *axis,
     move.acceleration = axis->acceleration;
     move.pulse_count = (uint32_t)((signed_pulses < 0) ?
                          -signed_pulses : signed_pulses);
-    move.motion_mode = 0U;
+    move.motion_mode = ZDT_X42S_MOTION_RELATIVE_CURRENT;
     move.sync_flag = 0U;
     if (!stepper_service_move_axis(axis->axis, &move)) {
         return false;
@@ -45,15 +70,17 @@ static bool submit_axis_move(const vision_tracking_axis_t *axis,
 static void send_telemetry(uint32_t now_ms)
 {
     static uint32_t last_telemetry_ms;
-    char line[80];
+    char line[96];
     int length;
 
     if ((uint32_t)(now_ms - last_telemetry_ms) <
         VISION_TRACKING_TELEMETRY_PERIOD_MS) {
         return;
     }
-    length = snprintf(line, sizeof(line), "VT,%lu,%lu,%ld,%ld,%ld,%ld",
+    length = snprintf(line, sizeof(line), "VT,%lu,%lu,%lu,%lu,%ld,%ld,%ld,%ld",
                       (unsigned long)now_ms,
+                      (unsigned long)g_vision_tracking_debug.using_simulated_input,
+                      (unsigned long)g_vision_tracking_debug.stimulus_sequence,
                       (unsigned long)g_vision_tracking_debug.last_target_valid,
                       (long)g_vision_tracking_debug.last_error_x_pixels,
                       (long)g_vision_tracking_debug.last_error_y_pixels,
@@ -77,7 +104,7 @@ void vision_tracking_task(void *argument)
         .speed_rpm = VISION_TRACKING_SPEED_RPM,
         .acceleration = VISION_TRACKING_ACCELERATION,
     };
-    const gimbal_pd_tracker_config_t yaw_config = {
+    gimbal_pd_tracker_config_t yaw_config = {
         .kp_pulses_per_pixel = VISION_TRACKING_YAW_KP_PULSES_PER_PIXEL,
         .kd_pulse_seconds_per_pixel =
             VISION_TRACKING_YAW_KD_PULSE_SECONDS_PER_PIXEL,
@@ -86,7 +113,7 @@ void vision_tracking_task(void *argument)
         .command_period_ms = VISION_TRACKING_COMMAND_PERIOD_MS,
         .positive_error_is_cw = VISION_TRACKING_YAW_POSITIVE_IS_CW,
     };
-    const gimbal_pd_tracker_config_t pitch_config = {
+    gimbal_pd_tracker_config_t pitch_config = {
         .kp_pulses_per_pixel = VISION_TRACKING_PITCH_KP_PULSES_PER_PIXEL,
         .kd_pulse_seconds_per_pixel =
             VISION_TRACKING_PITCH_KD_PULSE_SECONDS_PER_PIXEL,
@@ -99,6 +126,10 @@ void vision_tracking_task(void *argument)
     gimbal_pd_tracker_t pitch_tracker;
     vision_observation_t observation;
     vision_uart_stats_t uart_stats;
+    bool previous_control_enabled;
+#if VISION_TRACKING_USE_SIMULATED_INPUT
+    vision_stimulus_t stimulus;
+#endif
 
     (void)argument;
     g_vision_tracking_debug.task_started = 1U;
@@ -108,14 +139,28 @@ void vision_tracking_task(void *argument)
     g_vision_tracking_debug.uart_initialized = 1U;
     gimbal_pd_tracker_init(&yaw_tracker);
     gimbal_pd_tracker_init(&pitch_tracker);
+    previous_control_enabled = g_control_enabled;
+#if VISION_TRACKING_USE_SIMULATED_INPUT
+    vision_stimulus_init(&stimulus, VISION_TRACKING_STIMULUS_SEED);
+    g_vision_tracking_debug.using_simulated_input = 1U;
+#endif
     (void)stepper_service_set_axis_enabled(STEPPER_AXIS_YAW, true);
     (void)stepper_service_set_axis_enabled(STEPPER_AXIS_PITCH, true);
 
     for (;;) {
         TickType_t now = xTaskGetTickCount();
 
-        vision_uart_process((uint32_t)(now * portTICK_PERIOD_MS));
-        if (vision_uart_take_latest(&observation)) {
+        uint32_t now_ms = (uint32_t)(now * portTICK_PERIOD_MS);
+        bool observation_ready;
+
+#if VISION_TRACKING_USE_SIMULATED_INPUT
+        observation_ready = vision_stimulus_take(&stimulus, now_ms, &observation);
+        g_vision_tracking_debug.stimulus_sequence = stimulus.sequence;
+#else
+        vision_uart_process(now_ms);
+        observation_ready = vision_uart_take_latest(&observation);
+#endif
+        if (observation_ready) {
             int32_t dx = (int32_t)observation.target_x -
                          ((int32_t)observation.frame_width / 2);
             int32_t dy = (int32_t)observation.target_y -
@@ -127,13 +172,22 @@ void vision_tracking_task(void *argument)
             g_vision_tracking_debug.last_target_y = observation.target_y;
             g_vision_tracking_debug.last_error_x_pixels = dx;
             g_vision_tracking_debug.last_error_y_pixels = dy;
-            {
+            if (g_control_enabled != previous_control_enabled) {
+                gimbal_pd_tracker_init(&yaw_tracker);
+                gimbal_pd_tracker_init(&pitch_tracker);
+                previous_control_enabled = g_control_enabled;
+            }
+            yaw_config.kp_pulses_per_pixel = g_tuning.yaw_kp;
+            yaw_config.kd_pulse_seconds_per_pixel = g_tuning.yaw_kd;
+            pitch_config.kp_pulses_per_pixel = g_tuning.pitch_kp;
+            pitch_config.kd_pulse_seconds_per_pixel = g_tuning.pitch_kd;
+            if (g_control_enabled) {
                 int32_t output_pulses;
 
                 if (gimbal_pd_tracker_update(&yaw_tracker, &yaw_config,
                                              observation.target_valid,
                                              (int16_t)dx,
-                                             (uint32_t)(now * portTICK_PERIOD_MS),
+                                             now_ms,
                                              &output_pulses) &&
                     submit_axis_move(&yaw, output_pulses)) {
                     g_vision_tracking_debug.yaw_command_count++;
@@ -141,7 +195,7 @@ void vision_tracking_task(void *argument)
                 if (gimbal_pd_tracker_update(&pitch_tracker, &pitch_config,
                                              observation.target_valid,
                                              (int16_t)dy,
-                                             (uint32_t)(now * portTICK_PERIOD_MS),
+                                             now_ms,
                                              &output_pulses) &&
                     submit_axis_move(&pitch, output_pulses)) {
                     g_vision_tracking_debug.pitch_command_count++;
@@ -158,13 +212,20 @@ void vision_tracking_task(void *argument)
                     pitch_tracker.last_d_term_milli_pulses;
                 g_vision_tracking_debug.pitch_output_pulses =
                     pitch_tracker.last_output_pulses;
+            } else {
+                g_vision_tracking_debug.yaw_p_term_milli_pulses = 0;
+                g_vision_tracking_debug.yaw_d_term_milli_pulses = 0;
+                g_vision_tracking_debug.yaw_output_pulses = 0;
+                g_vision_tracking_debug.pitch_p_term_milli_pulses = 0;
+                g_vision_tracking_debug.pitch_d_term_milli_pulses = 0;
+                g_vision_tracking_debug.pitch_output_pulses = 0;
             }
         }
         vision_uart_get_stats(&uart_stats);
         g_vision_tracking_debug.uart_packet_count = uart_stats.valid_packet_count;
         g_vision_tracking_debug.uart_parse_error_count = uart_stats.parse_error_count;
         g_vision_tracking_debug.uart_overrun_count = uart_stats.rx_overrun_count;
-        send_telemetry((uint32_t)(now * portTICK_PERIOD_MS));
+        send_telemetry(now_ms);
         vision_uart_service_tx();
         /* Publish this loop's snapshot. Keep the sequence even for RAM polling. */
         g_vision_tracking_debug.update_sequence += 2U;

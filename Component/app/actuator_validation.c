@@ -8,6 +8,7 @@
 #include "task.h"
 #include "config/actuator_validation_config.h"
 #include "task/app_tasks.h"
+#include "zdt_x42s/zdt_x42s.h"
 
 static volatile actuator_validation_stage_t g_stage =
     ACTUATOR_VALIDATION_WAITING;
@@ -19,7 +20,7 @@ static const app_stepper_move_t g_yaw_move = {
     .speed_rpm = ACTUATOR_VALIDATION_STEPPER_SPEED_RPM,
     .acceleration = ACTUATOR_VALIDATION_STEPPER_ACCELERATION,
     .pulse_count = ACTUATOR_VALIDATION_STEPPER_PULSES,
-    .motion_mode = 0U,
+    .motion_mode = ZDT_X42S_MOTION_RELATIVE_CURRENT,
     .sync_flag = 0U,
 };
 
@@ -28,7 +29,7 @@ static const app_stepper_move_t g_pitch_move = {
     .speed_rpm = ACTUATOR_VALIDATION_STEPPER_SPEED_RPM,
     .acceleration = ACTUATOR_VALIDATION_STEPPER_ACCELERATION,
     .pulse_count = ACTUATOR_VALIDATION_STEPPER_PULSES,
-    .motion_mode = 0U,
+    .motion_mode = ZDT_X42S_MOTION_RELATIVE_CURRENT,
     .sync_flag = 0U,
 };
 

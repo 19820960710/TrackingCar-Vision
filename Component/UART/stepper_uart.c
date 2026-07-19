@@ -82,14 +82,27 @@ bool stepper_uart_write(stepper_uart_axis_t axis,
 {
     size_t index;
     UART_Regs *instance;
+    bool scheduler_running;
 
     if (!axis_is_valid(axis) || ((data == NULL) && (length != 0U))) {
         return false;
     }
     instance = uart_instance(axis);
     lock_tx(axis);
+    scheduler_running =
+        xTaskGetSchedulerState() == taskSCHEDULER_RUNNING;
+    if (scheduler_running) {
+        /* A 13-byte Emm position frame takes slightly more than one 1 ms
+         * tick at 115200 baud. Do not let the higher-priority vision task
+         * insert a parser-breaking gap in the middle of the frame. UART
+         * interrupts remain enabled while only task scheduling is held. */
+        vTaskSuspendAll();
+    }
     for (index = 0U; index < length; index++) {
         DL_UART_transmitDataBlocking(instance, data[index]);
+    }
+    if (scheduler_running) {
+        (void)xTaskResumeAll();
     }
     unlock_tx(axis);
     return true;
