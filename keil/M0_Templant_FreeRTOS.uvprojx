@@ -10,7 +10,7 @@
       <TargetName>M0_Templant_FreeRTOS</TargetName>
       <ToolsetNumber>0x4</ToolsetNumber>
       <ToolsetName>ARM-ADS</ToolsetName>
-      <pCCUsed>6160000::V6.16::ARMCLANG</pCCUsed>
+      <pCCUsed>6240000::V6.24::ARMCLANG</pCCUsed>
       <uAC6>1</uAC6>
       <TargetOption>
         <TargetCommonOption>
@@ -186,6 +186,7 @@
             <RvdsVP>0</RvdsVP>
             <RvdsMve>0</RvdsMve>
             <RvdsCdeCp>0</RvdsCdeCp>
+            <nBranchProt>0</nBranchProt>
             <hadIRAM2>1</hadIRAM2>
             <hadIROM2>1</hadIROM2>
             <StupSel>0</StupSel>
@@ -638,6 +639,11 @@
               <FileType>5</FileType>
               <FilePath>../Component/config/gimbal_autotune_config.h</FilePath>
             </File>
+            <File>
+              <FileName>line_tracking_config.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/config/line_tracking_config.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -687,6 +693,71 @@
               <FileName>speed_loop_core.h</FileName>
               <FileType>5</FileType>
               <FilePath>../Component/control/speed_loop_core.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Component/tracker</GroupName>
+          <Files>
+            <File>
+              <FileName>tracker_sensor_analog_8ch.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/tracker/tracker_sensor_analog_8ch.c</FilePath>
+            </File>
+            <File>
+              <FileName>tracker_sensor_analog_8ch.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/tracker/tracker_sensor_analog_8ch.h</FilePath>
+            </File>
+            <File>
+              <FileName>tracker_analog_8ch_mspm0.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/tracker/tracker_analog_8ch_mspm0.c</FilePath>
+            </File>
+            <File>
+              <FileName>tracker_analog_8ch_mspm0.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/tracker/tracker_analog_8ch_mspm0.h</FilePath>
+            </File>
+            <File>
+              <FileName>tracker_position_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/tracker/tracker_position_control.c</FilePath>
+            </File>
+            <File>
+              <FileName>tracker_position_control.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/tracker/tracker_position_control.h</FilePath>
+            </File>
+            <File>
+              <FileName>gear_motor_angle_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/tracker/gear_motor_angle_control.c</FilePath>
+            </File>
+            <File>
+              <FileName>gear_motor_angle_control.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/tracker/gear_motor_angle_control.h</FilePath>
+            </File>
+            <File>
+              <FileName>tracker_corner_detector.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/tracker/tracker_corner_detector.c</FilePath>
+            </File>
+            <File>
+              <FileName>tracker_corner_detector.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/tracker/tracker_corner_detector.h</FilePath>
+            </File>
+            <File>
+              <FileName>tracker_corner_alignment.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/tracker/tracker_corner_alignment.c</FilePath>
+            </File>
+            <File>
+              <FileName>tracker_corner_alignment.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/tracker/tracker_corner_alignment.h</FilePath>
             </File>
           </Files>
         </Group>
@@ -797,6 +868,16 @@
               <FileName>gimbal_autotune.h</FileName>
               <FileType>5</FileType>
               <FilePath>../Component/app/gimbal_autotune.h</FilePath>
+            </File>
+            <File>
+              <FileName>line_tracking.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Component/app/line_tracking.c</FilePath>
+            </File>
+            <File>
+              <FileName>line_tracking.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>../Component/app/line_tracking.h</FilePath>
             </File>
           </Files>
         </Group>

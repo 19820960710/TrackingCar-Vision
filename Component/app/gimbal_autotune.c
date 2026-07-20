@@ -200,6 +200,11 @@ static bool take_control_for_offset(void)
         yaw.command_pending || pitch.command_pending) {
         return false;
     }
+    if (!stepper_service_clear_axis_stall(STEPPER_AXIS_YAW) ||
+        !stepper_service_clear_axis_stall(STEPPER_AXIS_PITCH)) {
+        return false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(GIMBAL_AUTOTUNE_AXIS_ENABLE_DELAY_MS));
     if (!stepper_service_set_axis_enabled(STEPPER_AXIS_YAW, true) ||
         !stepper_service_set_axis_enabled(STEPPER_AXIS_PITCH, true)) {
         return false;

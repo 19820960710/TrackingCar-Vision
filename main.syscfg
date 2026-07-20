@@ -1,14 +1,16 @@
 /**
  * These arguments were used when this file was generated. They will be automatically applied on subsequent loads
  * via the GUI or CLI. Run CLI with '--help' for additional information on how to override these arguments.
- * @cliArgs --device "MSPM0G350X" --part "Default" --package "LQFP-64(PM)" --product "mspm0_sdk@2.10.00.04"
- * @v2CliArgs --device "MSPM0G3507" --package "LQFP-64(PM)" --product "mspm0_sdk@2.10.00.04"
+ * @cliArgs --device "MSPM0G350X" --part "Default" --package "LQFP-64(PM)" --product "mspm0_sdk@2.05.01.00"
+ * @v2CliArgs --device "MSPM0G3507" --package "LQFP-64(PM)" --product "mspm0_sdk@2.05.01.00"
  * @versions {"tool":"1.26.2+4477"}
  */
 
 /**
  * Import the modules used in this configuration.
  */
+const ADC12  = scripting.addModule("/ti/driverlib/ADC12", {}, false);
+const ADC121 = ADC12.addInstance();
 const GPIO   = scripting.addModule("/ti/driverlib/GPIO", {}, false);
 const GPIO1  = GPIO.addInstance();
 const GPIO2  = GPIO.addInstance();
@@ -16,6 +18,7 @@ const GPIO3  = GPIO.addInstance();
 const GPIO4  = GPIO.addInstance();
 const GPIO5  = GPIO.addInstance();
 const GPIO6  = GPIO.addInstance();
+const GPIO7  = GPIO.addInstance();
 const I2C    = scripting.addModule("/ti/driverlib/I2C", {}, false);
 const I2C1   = I2C.addInstance();
 const PWM    = scripting.addModule("/ti/driverlib/PWM", {}, false);
@@ -115,6 +118,24 @@ GPIO6.associatedPins[1].interruptPriority = "3";
 GPIO6.associatedPins[1].polarity          = "RISE_FALL";
 GPIO6.associatedPins[1].pin.$assign       = "PA14";
 
+ADC121.$name                 = "ADC12_0";
+ADC121.sampClkSrc            = "DL_ADC12_CLOCK_ULPCLK";
+ADC121.samplingOperationMode = "sequence";
+ADC121.repeatMode            = true;
+ADC121.sampleTime0           = "2 us";
+ADC121.sampClkDiv            = "DL_ADC12_CLOCK_DIVIDE_8";
+ADC121.peripheral.$assign    = "ADC1";
+ADC121.adcPin0Config.$name   = "ti_driverlib_gpio_GPIOPinGeneric14";
+
+GPIO7.$name                         = "ADC";
+GPIO7.associatedPins.create(3);
+GPIO7.associatedPins[0].$name       = "AD0";
+GPIO7.associatedPins[0].pin.$assign = "PB5";
+GPIO7.associatedPins[1].$name       = "AD1";
+GPIO7.associatedPins[1].pin.$assign = "PB15";
+GPIO7.associatedPins[2].$name       = "AD2";
+GPIO7.associatedPins[2].pin.$assign = "PB16";
+
 I2C1.$name                             = "I2C_0";
 I2C1.basicEnableController             = true;
 I2C1.basicControllerStandardBusSpeed   = "Fast";   /* 400kHz */
@@ -201,6 +222,7 @@ UART3.rxPinConfig.$name        = "ti_driverlib_gpio_GPIOPinGeneric13";
 pinFunction4.peripheral.$suggestSolution           = "SYSCTL";
 pinFunction4.peripheral.hfxInPin.$suggestSolution  = "PA5";
 pinFunction4.peripheral.hfxOutPin.$suggestSolution = "PA6";
+ADC121.peripheral.adcPin0.$suggestSolution         = "PA15";
 Board.peripheral.$suggestSolution                  = "DEBUGSS";
 Board.peripheral.swclkPin.$suggestSolution         = "PA20";
 Board.peripheral.swdioPin.$suggestSolution         = "PA19";

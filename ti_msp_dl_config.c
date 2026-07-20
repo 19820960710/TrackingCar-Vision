@@ -60,6 +60,7 @@ SYSCONFIG_WEAK void SYSCFG_DL_init(void)
     SYSCFG_DL_UART_YAW_init();
     SYSCFG_DL_UART_PITCH_init();
     SYSCFG_DL_UART_VISION_init();
+    SYSCFG_DL_ADC12_0_init();
     /* Ensure backup structures have no valid state */
 
 	gQEI_ENCODER_LEFTBackup.backupRdy 	= false;
@@ -103,6 +104,7 @@ SYSCONFIG_WEAK void SYSCFG_DL_initPower(void)
     DL_UART_Main_reset(UART_YAW_INST);
     DL_UART_Main_reset(UART_PITCH_INST);
     DL_UART_Main_reset(UART_VISION_INST);
+    DL_ADC12_reset(ADC12_0_INST);
 
     DL_GPIO_enablePower(GPIOA);
     DL_GPIO_enablePower(GPIOB);
@@ -113,6 +115,7 @@ SYSCONFIG_WEAK void SYSCFG_DL_initPower(void)
     DL_UART_Main_enablePower(UART_YAW_INST);
     DL_UART_Main_enablePower(UART_PITCH_INST);
     DL_UART_Main_enablePower(UART_VISION_INST);
+    DL_ADC12_enablePower(ADC12_0_INST);
     delay_cycles(POWER_STARTUP_DELAY);
 }
 
@@ -184,6 +187,12 @@ SYSCONFIG_WEAK void SYSCFG_DL_GPIO_init(void)
 		 DL_GPIO_INVERSION_DISABLE, DL_GPIO_RESISTOR_PULL_UP,
 		 DL_GPIO_HYSTERESIS_DISABLE, DL_GPIO_WAKEUP_DISABLE);
 
+    DL_GPIO_initDigitalOutput(ADC_AD0_IOMUX);
+
+    DL_GPIO_initDigitalOutput(ADC_AD1_IOMUX);
+
+    DL_GPIO_initDigitalOutput(ADC_AD2_IOMUX);
+
     DL_GPIO_clearPins(GPIOA, GPIO_OLED_SW_I2C_PIN_OLED_SDA_PIN |
 		GPIO_OLED_SW_I2C_PIN_OLED_SCL_PIN |
 		GPIO_TB6612_PIN_BIN1_PIN);
@@ -199,11 +208,17 @@ SYSCONFIG_WEAK void SYSCFG_DL_GPIO_init(void)
     DL_GPIO_clearPins(GPIOB, LED_PIN_22_PIN |
 		GPIO_TB6612_PIN_AIN1_PIN |
 		GPIO_TB6612_PIN_AIN2_PIN |
-		GPIO_TB6612_PIN_BIN2_PIN);
+		GPIO_TB6612_PIN_BIN2_PIN |
+		ADC_AD0_PIN |
+		ADC_AD1_PIN |
+		ADC_AD2_PIN);
     DL_GPIO_enableOutput(GPIOB, LED_PIN_22_PIN |
 		GPIO_TB6612_PIN_AIN1_PIN |
 		GPIO_TB6612_PIN_AIN2_PIN |
-		GPIO_TB6612_PIN_BIN2_PIN);
+		GPIO_TB6612_PIN_BIN2_PIN |
+		ADC_AD0_PIN |
+		ADC_AD1_PIN |
+		ADC_AD2_PIN);
     DL_GPIO_setLowerPinsPolarity(GPIOB, DL_GPIO_PIN_4_EDGE_FALL);
     DL_GPIO_clearInterruptStatus(GPIOB, GPIO_MPU6050_INT_PIN_MPU6050_INT_PIN);
     DL_GPIO_enableInterrupt(GPIOB, GPIO_MPU6050_INT_PIN_MPU6050_INT_PIN);
@@ -224,66 +239,6 @@ static const DL_SYSCTL_SYSPLLConfig gSYSPLLConfig = {
 	.qDiv                   = 3,
 	.pDiv                   = DL_SYSCTL_SYSPLL_PDIV_1
 };
-
-SYSCONFIG_WEAK bool SYSCFG_DL_SYSCTL_SYSPLL_init(void)
-{
-    bool fFCCRatioStatus = false;
-    uint32_t fFCCSysoscCount;
-    uint32_t fFCCPllCount;
-    uint32_t fFCCRatio;
-    uint32_t fccTimeOutCounter;
-
-    DL_SYSCTL_setFCCPeriods( DL_SYSCTL_FCC_TRIG_CNT_01 );
-
-    /* Measuring PLL. */
-    DL_SYSCTL_configFCC(DL_SYSCTL_FCC_TRIG_TYPE_RISE_RISE,
-                        DL_SYSCTL_FCC_TRIG_SOURCE_LFCLK,
-                        DL_SYSCTL_FCC_CLOCK_SOURCE_SYSPLLCLK0);
-    /* Get SYSPLL frequency using FCC */
-    fccTimeOutCounter = 0;
-    DL_SYSCTL_startFCC();
-    while (DL_SYSCTL_isFCCDone() == 0) {
-        delay_cycles(977);  /* 1x LFCLK cycle = 32MHz/32.768kHz = 977, 30.5us */
-        fccTimeOutCounter++;
-        if(fccTimeOutCounter > 65){
-            /* Timeout set to approximately 2ms (user-customizable) */
-            break;
-        }
-    }
-
-    /* get measA= SYSPLLCLK0 freq wrt LFOSC*/
-    fFCCPllCount = DL_SYSCTL_readFCC();
-
-    /* Measuring SYSPLL Source */
-    DL_SYSCTL_configFCC(DL_SYSCTL_FCC_TRIG_TYPE_RISE_RISE,
-                        DL_SYSCTL_FCC_TRIG_SOURCE_LFCLK,
-                        DL_SYSCTL_FCC_CLOCK_SOURCE_HFCLK);
-    /* Get SYSPLL frequency using FCC */
-    fccTimeOutCounter = 0;
-    DL_SYSCTL_startFCC();
-    while (DL_SYSCTL_isFCCDone() == 0) {
-        delay_cycles(977);  /* 1x LFCLK cycle = 32MHz/32.768kHz = 977, 30.5us */
-        fccTimeOutCounter++;
-        if(fccTimeOutCounter > 65){
-            /* Timeout set to approximately 2ms (user-customizable) */
-            break;
-        }
-    }
-
-    /* get measB= SYSOSC freq wrt LFOSC*/
-    fFCCSysoscCount = DL_SYSCTL_readFCC();
-
-    /* Get ratio of both measurements*/
-    fFCCRatio = (fFCCPllCount * FLOAT_TO_INT_SCALE) / fFCCSysoscCount;
-    /* Check ratio is within bounds*/
-    if ((FCC_LOWER_BOUND <  fFCCRatio) && (fFCCRatio < FCC_UPPER_BOUND))
-    {
-        /* ratio is good for proceeding into application code. */
-        fFCCRatioStatus = true;
-    }
-
-    return fFCCRatioStatus;
-}
 SYSCONFIG_WEAK void SYSCFG_DL_SYSCTL_init(void)
 {
 
@@ -298,24 +253,6 @@ SYSCONFIG_WEAK void SYSCFG_DL_SYSCTL_init(void)
 	DL_SYSCTL_disableSYSPLL();
     DL_SYSCTL_setHFCLKSourceHFXTParams(DL_SYSCTL_HFXT_RANGE_32_48_MHZ,10, true);
     DL_SYSCTL_configSYSPLL((DL_SYSCTL_SYSPLLConfig *) &gSYSPLLConfig);
-
-    /*
-     * [SYSPLL_ERR_01]
-     * PLL Incorrect locking WA start.
-     * Insert after every PLL enable.
-     * This can lead an infinite loop if the condition persists
-     * and can block entry to the application code.
-     */
-
-    while (SYSCFG_DL_SYSCTL_SYSPLL_init() == false)
-    {
-        /* Toggle SYSPLL enable to re-enable SYSPLL and re-check incorrect locking */
-        DL_SYSCTL_disableSYSPLL();
-        SYSCTL->SOCLOCK.HSCLKEN |= SYSCTL_HSCLKEN_SYSPLLEN_MASK;
-
-        /* Wait until SYSPLL startup is stabilized*/
-        while ((DL_SYSCTL_getClockStatus() & SYSCTL_CLKSTATUS_SYSPLLGOOD_MASK) != DL_SYSCTL_CLK_STATUS_SYSPLL_GOOD){}
-    }
     DL_SYSCTL_setULPCLKDivider(DL_SYSCTL_ULPCLK_DIV_2);
     DL_SYSCTL_enableMFCLK();
     DL_SYSCTL_setMCLKSource(SYSOSC, HSCLK, DL_SYSCTL_HSCLK_SOURCE_SYSPLL);
@@ -466,6 +403,7 @@ SYSCONFIG_WEAK void SYSCFG_DL_I2C_0_init(void) {
 
 }
 
+
 static const DL_UART_Main_ClockConfig gUART_YAWClockConfig = {
     .clockSel    = DL_UART_MAIN_CLOCK_BUSCLK,
     .divideRatio = DL_UART_MAIN_CLOCK_DIVIDE_RATIO_1
@@ -501,6 +439,7 @@ SYSCONFIG_WEAK void SYSCFG_DL_UART_YAW_init(void)
 
     DL_UART_Main_enable(UART_YAW_INST);
 }
+
 static const DL_UART_Main_ClockConfig gUART_PITCHClockConfig = {
     .clockSel    = DL_UART_MAIN_CLOCK_BUSCLK,
     .divideRatio = DL_UART_MAIN_CLOCK_DIVIDE_RATIO_1
@@ -536,6 +475,7 @@ SYSCONFIG_WEAK void SYSCFG_DL_UART_PITCH_init(void)
 
     DL_UART_Main_enable(UART_PITCH_INST);
 }
+
 static const DL_UART_Main_ClockConfig gUART_VISIONClockConfig = {
     .clockSel    = DL_UART_MAIN_CLOCK_BUSCLK,
     .divideRatio = DL_UART_MAIN_CLOCK_DIVIDE_RATIO_1
@@ -570,5 +510,26 @@ SYSCONFIG_WEAK void SYSCFG_DL_UART_VISION_init(void)
 
 
     DL_UART_Main_enable(UART_VISION_INST);
+}
+
+/* ADC12_0 Initialization */
+static const DL_ADC12_ClockConfig gADC12_0ClockConfig = {
+    .clockSel       = DL_ADC12_CLOCK_ULPCLK,
+    .divideRatio    = DL_ADC12_CLOCK_DIVIDE_8,
+    .freqRange      = DL_ADC12_CLOCK_FREQ_RANGE_32_TO_40,
+};
+SYSCONFIG_WEAK void SYSCFG_DL_ADC12_0_init(void)
+{
+    DL_ADC12_setClockConfig(ADC12_0_INST, (DL_ADC12_ClockConfig *) &gADC12_0ClockConfig);
+
+    DL_ADC12_initSeqSample(ADC12_0_INST,
+        DL_ADC12_REPEAT_MODE_ENABLED, DL_ADC12_SAMPLING_SOURCE_AUTO, DL_ADC12_TRIG_SRC_SOFTWARE,
+        DL_ADC12_SEQ_START_ADDR_00, DL_ADC12_SEQ_END_ADDR_00, DL_ADC12_SAMP_CONV_RES_12_BIT,
+        DL_ADC12_SAMP_CONV_DATA_FORMAT_UNSIGNED);
+    DL_ADC12_configConversionMem(ADC12_0_INST, ADC12_0_ADCMEM_0,
+        DL_ADC12_INPUT_CHAN_0, DL_ADC12_REFERENCE_VOLTAGE_VDDA, DL_ADC12_SAMPLE_TIMER_SOURCE_SCOMP0, DL_ADC12_AVERAGING_MODE_DISABLED,
+        DL_ADC12_BURN_OUT_SOURCE_DISABLED, DL_ADC12_TRIGGER_MODE_AUTO_NEXT, DL_ADC12_WINDOWS_COMP_MODE_DISABLED);
+    DL_ADC12_setSampleTime0(ADC12_0_INST,10);
+    DL_ADC12_enableConversions(ADC12_0_INST);
 }
 

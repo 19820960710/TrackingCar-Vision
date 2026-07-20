@@ -11,6 +11,8 @@
 #define ZDT_CMD_POSITION           0xFDU
 #define ZDT_CMD_STOP               0xFEU
 #define ZDT_CMD_READ_POSITION      0x36U
+#define ZDT_CMD_CLEAR_STALL        0x0EU
+#define ZDT_CLEAR_STALL_KEY        0x52U
 #define ZDT_STOP_KEY               0x98U
 #define ZDT_RESPONSE_ACCEPTED_CODE 0x02U
 #define ZDT_RESPONSE_REACHED_CODE  0x9FU
@@ -56,6 +58,20 @@ bool zdt_x42s_set_enabled(zdt_x42s_t *motor, bool enabled)
     frame[3] = enabled ? 0x01U : 0x00U;
     frame[4] = 0x00U;
     frame[5] = ZDT_FRAME_SUFFIX;
+    return send_frame(motor, frame, sizeof(frame));
+}
+
+bool zdt_x42s_clear_stall_protection(zdt_x42s_t *motor)
+{
+    uint8_t frame[4];
+
+    if (motor == NULL) {
+        return false;
+    }
+    frame[0] = motor->address;
+    frame[1] = ZDT_CMD_CLEAR_STALL;
+    frame[2] = ZDT_CLEAR_STALL_KEY;
+    frame[3] = ZDT_FRAME_SUFFIX;
     return send_frame(motor, frame, sizeof(frame));
 }
 

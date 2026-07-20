@@ -79,14 +79,7 @@ extern "C" {
 #define GPIO_HFXOUT_PIN                                            DL_GPIO_PIN_6
 #define GPIO_HFXOUT_IOMUX                                        (IOMUX_PINCM11)
 #define CPUCLK_FREQ                                                     80000000
-/* Defines for SYSPLL_ERR_01 Workaround */
-/* Represent 1.000 as 1000 */
-#define FLOAT_TO_INT_SCALE                                               (1000U)
-#define FCC_EXPECTED_RATIO                                                  2000
-#define FCC_UPPER_BOUND                       (FCC_EXPECTED_RATIO * (1 + 0.003))
-#define FCC_LOWER_BOUND                       (FCC_EXPECTED_RATIO * (1 - 0.003))
 
-bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 
 
 /* Defines for PWM_TB6612 */
@@ -203,6 +196,18 @@ bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 
 
 
+/* Defines for ADC12_0 */
+#define ADC12_0_INST                                                        ADC1
+#define ADC12_0_INST_IRQHandler                                  ADC1_IRQHandler
+#define ADC12_0_INST_INT_IRQN                                    (ADC1_INT_IRQn)
+#define ADC12_0_ADCMEM_0                                      DL_ADC12_MEM_IDX_0
+#define ADC12_0_ADCMEM_0_REF                     DL_ADC12_REFERENCE_VOLTAGE_VDDA
+#define ADC12_0_ADCMEM_0_REF_VOLTAGE_V                                       3.3
+#define GPIO_ADC12_0_C0_PORT                                               GPIOA
+#define GPIO_ADC12_0_C0_PIN                                       DL_GPIO_PIN_15
+
+
+
 /* Port definition for Pin Group LED */
 #define LED_PORT                                                         (GPIOB)
 
@@ -264,7 +269,18 @@ bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 #define GPIO_ENCODER_RIGHT_PIN_RIGHT_B_IIDX                 (DL_GPIO_IIDX_DIO14)
 #define GPIO_ENCODER_RIGHT_PIN_RIGHT_B_PIN                      (DL_GPIO_PIN_14)
 #define GPIO_ENCODER_RIGHT_PIN_RIGHT_B_IOMUX                     (IOMUX_PINCM36)
+/* Port definition for Pin Group ADC */
+#define ADC_PORT                                                         (GPIOB)
 
+/* Defines for AD0: GPIOB.5 with pinCMx 18 on package pin 53 */
+#define ADC_AD0_PIN                                              (DL_GPIO_PIN_5)
+#define ADC_AD0_IOMUX                                            (IOMUX_PINCM18)
+/* Defines for AD1: GPIOB.15 with pinCMx 32 on package pin 3 */
+#define ADC_AD1_PIN                                             (DL_GPIO_PIN_15)
+#define ADC_AD1_IOMUX                                            (IOMUX_PINCM32)
+/* Defines for AD2: GPIOB.16 with pinCMx 33 on package pin 4 */
+#define ADC_AD2_PIN                                             (DL_GPIO_PIN_16)
+#define ADC_AD2_IOMUX                                            (IOMUX_PINCM33)
 
 /* clang-format on */
 
@@ -272,8 +288,6 @@ void SYSCFG_DL_init(void);
 void SYSCFG_DL_initPower(void);
 void SYSCFG_DL_GPIO_init(void);
 void SYSCFG_DL_SYSCTL_init(void);
-
-bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 void SYSCFG_DL_PWM_TB6612_init(void);
 void SYSCFG_DL_QEI_ENCODER_LEFT_init(void);
 void SYSCFG_DL_TIMER_0_init(void);
@@ -281,6 +295,7 @@ void SYSCFG_DL_I2C_0_init(void);
 void SYSCFG_DL_UART_YAW_init(void);
 void SYSCFG_DL_UART_PITCH_init(void);
 void SYSCFG_DL_UART_VISION_init(void);
+void SYSCFG_DL_ADC12_0_init(void);
 
 
 bool SYSCFG_DL_saveConfiguration(void);

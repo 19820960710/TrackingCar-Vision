@@ -38,9 +38,9 @@
 
 /* Mailbox command limits. They prevent an invalid debugger write from
  * applying unbounded gains to the live control loop. */
-#define GIMBAL_AUTOTUNE_YAW_KP_MAX              0.60f
-#define GIMBAL_AUTOTUNE_YAW_KD_MAX              0.030f
-#define GIMBAL_AUTOTUNE_PITCH_KP_MAX            1.00f
-#define GIMBAL_AUTOTUNE_PITCH_KD_MAX            0.030f
+#define GIMBAL_AUTOTUNE_YAW_KP_MAX              2.00f
+#define GIMBAL_AUTOTUNE_YAW_KD_MAX              0.050f
+#define GIMBAL_AUTOTUNE_PITCH_KP_MAX            2.00f
+#define GIMBAL_AUTOTUNE_PITCH_KD_MAX            0.050f
 
 #endif /* GIMBAL_AUTOTUNE_CONFIG_H */

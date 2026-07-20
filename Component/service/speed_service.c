@@ -28,6 +28,8 @@ typedef struct {
 static QueueHandle_t g_speed_target_queue = NULL;
 static QueueHandle_t g_speed_state_queue = NULL;
 static speed_loop_core_t g_speed_core;
+static int32_t g_left_encoder_count = 0;
+static int32_t g_right_encoder_count = 0;
 
 static speed_loop_config_t g_active_speed_config;
 
@@ -79,6 +81,8 @@ static void publish_snapshot(void)
     state.right_speed_mm_s = output.right_speed_mm_s;
     state.left_target_mm_s = output.left_target_mm_s;
     state.right_target_mm_s = output.right_target_mm_s;
+    state.left_encoder_count = g_left_encoder_count;
+    state.right_encoder_count = g_right_encoder_count;
     state.left_pwm_duty_count = output.left_pwm_duty_count;
     state.right_pwm_duty_count = output.right_pwm_duty_count;
     state.stopped = output.stopped;
@@ -105,6 +109,8 @@ bool speed_service_init(void)
     build_control_config(MOTOR_SPEED_ACTIVE_PROFILE, &g_active_speed_config);
     speed_loop_core_init(&g_speed_core, &g_active_speed_config);
     encoder_reset();
+    g_left_encoder_count = 0;
+    g_right_encoder_count = 0;
     publish_snapshot();
     return true;
 }
@@ -137,6 +143,8 @@ void speed_service_step_10ms(void)
     }
 
     encoder_get_data(&encoder);
+    g_left_encoder_count = encoder.left_count;
+    g_right_encoder_count = encoder.right_count;
     if (speed_loop_core_update_sample(&g_speed_core,
                                       encoder.left_delta,
                                       encoder.right_delta,

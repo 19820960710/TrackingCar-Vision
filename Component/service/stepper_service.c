@@ -17,6 +17,7 @@
 
 typedef enum {
     STEPPER_COMMAND_ENABLE = 0,
+    STEPPER_COMMAND_CLEAR_STALL,
     STEPPER_COMMAND_MOVE,
     STEPPER_COMMAND_STOP,
     STEPPER_COMMAND_QUERY_POSITION
@@ -26,11 +27,14 @@ typedef struct {
     stepper_command_type_t type;
     stepper_axis_t axis;
     bool enable;
+    uint32_t motion_generation;
     stepper_motor_move_t move;
 } stepper_command_t;
 
 static QueueHandle_t g_command_queue = NULL;
+static QueueHandle_t g_latest_move_queue[STEPPER_AXIS_COUNT] = {NULL};
 static QueueHandle_t g_state_queue[STEPPER_AXIS_COUNT] = {NULL};
+static volatile uint32_t g_motion_generation[STEPPER_AXIS_COUNT] = {0U};
 static stepper_motor_t g_motor[STEPPER_AXIS_COUNT];
 static stepper_service_state_t g_state[STEPPER_AXIS_COUNT];
 static stepper_axis_t g_transport_axis[STEPPER_AXIS_COUNT] = {
@@ -103,7 +107,12 @@ bool stepper_service_init(void)
             g_state_queue[axis] =
                 xQueueCreate(1, sizeof(stepper_service_state_t));
         }
+        if (g_latest_move_queue[axis] == NULL) {
+            g_latest_move_queue[axis] =
+                xQueueCreate(1, sizeof(stepper_command_t));
+        }
         if ((g_state_queue[axis] == NULL) ||
+            (g_latest_move_queue[axis] == NULL) ||
             !stepper_motor_init(&g_motor[axis], &transport,
                                 g_address[axis])) {
             return false;
@@ -130,12 +139,36 @@ bool stepper_service_set_axis_enabled(stepper_axis_t axis, bool enabled)
     return xQueueSend(g_command_queue, &command, 0U) == pdPASS;
 }
 
+bool stepper_service_clear_axis_stall(stepper_axis_t axis)
+{
+    stepper_command_t command = {0};
+
+    if (!g_available || !axis_is_valid(axis) || (g_command_queue == NULL)) {
+        return false;
+    }
+    command.type = STEPPER_COMMAND_CLEAR_STALL;
+    command.axis = axis;
+    return xQueueSend(g_command_queue, &command, 0U) == pdPASS;
+}
+
 bool stepper_service_clear_pending_commands(void)
 {
+    stepper_axis_t axis;
+
     if (!g_available || (g_command_queue == NULL)) {
         return false;
     }
-    return xQueueReset(g_command_queue) == pdPASS;
+    if (xQueueReset(g_command_queue) != pdPASS) {
+        return false;
+    }
+    for (axis = STEPPER_AXIS_YAW; axis < STEPPER_AXIS_COUNT; axis++) {
+        g_motion_generation[axis]++;
+        if ((g_latest_move_queue[axis] == NULL) ||
+            (xQueueReset(g_latest_move_queue[axis]) != pdPASS)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool stepper_service_stop_all(void)
@@ -151,8 +184,24 @@ bool stepper_service_stop_all(void)
     pitch_stop.type = STEPPER_COMMAND_STOP;
     pitch_stop.axis = STEPPER_AXIS_PITCH;
     (void)stepper_service_clear_pending_commands();
-    return (xQueueSend(g_command_queue, &yaw_stop, 0U) == pdPASS) &&
-           (xQueueSend(g_command_queue, &pitch_stop, 0U) == pdPASS);
+    return (xQueueSendToFront(g_command_queue, &pitch_stop, 0U) == pdPASS) &&
+           (xQueueSendToFront(g_command_queue, &yaw_stop, 0U) == pdPASS);
+}
+
+bool stepper_service_stop_axis(stepper_axis_t axis)
+{
+    stepper_command_t command = {0};
+
+    if (!g_available || !axis_is_valid(axis) || (g_command_queue == NULL) ||
+        (g_latest_move_queue[axis] == NULL)) {
+        return false;
+    }
+    /* Invalidate a move already removed from the mailbox but not transmitted. */
+    g_motion_generation[axis]++;
+    (void)xQueueReset(g_latest_move_queue[axis]);
+    command.type = STEPPER_COMMAND_STOP;
+    command.axis = axis;
+    return xQueueSendToFront(g_command_queue, &command, 0U) == pdPASS;
 }
 
 bool stepper_service_move_axis(stepper_axis_t axis,
@@ -160,14 +209,15 @@ bool stepper_service_move_axis(stepper_axis_t axis,
 {
     stepper_command_t command = {0};
 
-    if (!g_available || !axis_is_valid(axis) ||
-        (g_command_queue == NULL) || (move == NULL)) {
+    if (!g_available || !axis_is_valid(axis) || (move == NULL) ||
+        (g_latest_move_queue[axis] == NULL)) {
         return false;
     }
     command.type = STEPPER_COMMAND_MOVE;
     command.axis = axis;
+    command.motion_generation = g_motion_generation[axis];
     command.move = *move;
-    return xQueueSend(g_command_queue, &command, 0U) == pdPASS;
+    return xQueueOverwrite(g_latest_move_queue[axis], &command) == pdPASS;
 }
 
 bool stepper_service_request_position(stepper_axis_t axis)
@@ -213,11 +263,17 @@ static void execute_command(const stepper_command_t *command)
     if (!axis_is_valid(axis)) {
         return;
     }
+    if ((command->type == STEPPER_COMMAND_MOVE) &&
+        (command->motion_generation != g_motion_generation[axis])) {
+        return;
+    }
     if (command->type == STEPPER_COMMAND_ENABLE) {
         tx_ok = stepper_motor_set_enabled(&g_motor[axis], command->enable);
         if (tx_ok) {
             g_state[axis].enabled = command->enable;
         }
+    } else if (command->type == STEPPER_COMMAND_CLEAR_STALL) {
+        tx_ok = stepper_motor_clear_stall_protection(&g_motor[axis]);
     } else if (command->type == STEPPER_COMMAND_MOVE) {
         /* 新的位置指令必须等待它自己的到位响应，不复用上一次的状态。 */
         g_state[axis].last_response = ZDT_X42S_RESPONSE_NONE;
@@ -271,18 +327,29 @@ void stepper_service_task(void *argument)
         vTaskSuspend(NULL);
     }
     for (;;) {
-        if (xQueueReceive(g_command_queue, &command,
-                          pdMS_TO_TICKS(STEPPER_SERVICE_POLL_PERIOD_MS)) == pdPASS) {
+        stepper_axis_t axis;
+
+        /* Control commands, especially STOP, always pre-empt position moves. */
+        while (xQueueReceive(g_command_queue, &command, 0U) == pdPASS) {
             execute_command(&command);
+        }
+        for (axis = STEPPER_AXIS_YAW; axis < STEPPER_AXIS_COUNT; axis++) {
+            if (uxQueueMessagesWaiting(g_command_queue) != 0U) {
+                break;
+            }
+            if (xQueueReceive(g_latest_move_queue[axis], &command, 0U) == pdPASS) {
+                execute_command(&command);
+            }
         }
         poll_responses();
         {
-            bool pending = uxQueueMessagesWaiting(g_command_queue) != 0U;
-            stepper_axis_t axis;
             for (axis = STEPPER_AXIS_YAW; axis < STEPPER_AXIS_COUNT; axis++) {
-                g_state[axis].command_pending = pending;
+                g_state[axis].command_pending =
+                    (uxQueueMessagesWaiting(g_command_queue) != 0U) ||
+                    (uxQueueMessagesWaiting(g_latest_move_queue[axis]) != 0U);
                 publish_state(axis);
             }
         }
+        vTaskDelay(pdMS_TO_TICKS(STEPPER_SERVICE_POLL_PERIOD_MS));
     }
 }

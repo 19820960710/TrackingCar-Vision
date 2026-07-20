@@ -65,3 +65,25 @@ void SYSCFG_DL_UART_VISION_init(void)
 {
     init_uart_115200(UART_VISION_INST);
 }
+
+/* Generated TIMER_0 assumes 80 MHz, while this board runs at 32 MHz. */
+void SYSCFG_DL_TIMER_0_init(void)
+{
+    const DL_TimerG_ClockConfig clock_config = {
+        .clockSel = DL_TIMER_CLOCK_BUSCLK,
+        .divideRatio = DL_TIMER_CLOCK_DIVIDE_1,
+        .prescale = 0U,
+    };
+    const DL_TimerG_TimerConfig timer_config = {
+        .period = 319999U,
+        .timerMode = DL_TIMER_TIMER_MODE_PERIODIC,
+        .startTimer = DL_TIMER_STOP,
+    };
+
+    DL_TimerG_setClockConfig(
+        TIMER_0_INST, (DL_TimerG_ClockConfig *)&clock_config);
+    DL_TimerG_initTimerMode(
+        TIMER_0_INST, (DL_TimerG_TimerConfig *)&timer_config);
+    DL_TimerG_enableInterrupt(TIMER_0_INST, DL_TIMERG_INTERRUPT_ZERO_EVENT);
+    DL_TimerG_enableClock(TIMER_0_INST);
+}

@@ -18,6 +18,7 @@ bool stepper_motor_init(stepper_motor_t *motor,
                         const zdt_x42s_transport_t *transport,
                         uint8_t address);
 bool stepper_motor_set_enabled(stepper_motor_t *motor, bool enabled);
+bool stepper_motor_clear_stall_protection(stepper_motor_t *motor);
 bool stepper_motor_move(stepper_motor_t *motor,
                         const stepper_motor_move_t *move);
 bool stepper_motor_stop(stepper_motor_t *motor, uint8_t sync_flag);

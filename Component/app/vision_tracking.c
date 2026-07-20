@@ -21,6 +21,7 @@ typedef struct {
     stepper_axis_t axis;
     uint16_t speed_rpm;
     uint8_t acceleration;
+    bool motion_command_active;
 } vision_tracking_axis_t;
 
 volatile vision_tracking_debug_t g_vision_tracking_debug = {0};
@@ -67,6 +68,24 @@ static bool submit_axis_move(const vision_tracking_axis_t *axis,
     return true;
 }
 
+static void apply_axis_action(vision_tracking_axis_t *axis,
+                              gimbal_pd_action_t action,
+                              int32_t signed_pulses,
+                              volatile uint32_t *command_count)
+{
+    if (action == GIMBAL_PD_ACTION_MOVE) {
+        if (submit_axis_move(axis, signed_pulses)) {
+            axis->motion_command_active = true;
+            (*command_count)++;
+        }
+    } else if ((action == GIMBAL_PD_ACTION_STOP) &&
+               axis->motion_command_active) {
+        if (stepper_service_stop_axis(axis->axis)) {
+            axis->motion_command_active = false;
+        }
+    }
+}
+
 static void send_telemetry(uint32_t now_ms)
 {
     static uint32_t last_telemetry_ms;
@@ -98,17 +117,20 @@ void vision_tracking_task(void *argument)
         .axis = STEPPER_AXIS_YAW,
         .speed_rpm = VISION_TRACKING_SPEED_RPM,
         .acceleration = VISION_TRACKING_ACCELERATION,
+        .motion_command_active = false,
     };
     vision_tracking_axis_t pitch = {
         .axis = STEPPER_AXIS_PITCH,
         .speed_rpm = VISION_TRACKING_SPEED_RPM,
         .acceleration = VISION_TRACKING_ACCELERATION,
+        .motion_command_active = false,
     };
     gimbal_pd_tracker_config_t yaw_config = {
         .kp_pulses_per_pixel = VISION_TRACKING_YAW_KP_PULSES_PER_PIXEL,
         .kd_pulse_seconds_per_pixel =
             VISION_TRACKING_YAW_KD_PULSE_SECONDS_PER_PIXEL,
-        .deadband_pixels = VISION_TRACKING_DEADBAND_PIXELS,
+        .stop_band_pixels = VISION_TRACKING_STOP_BAND_PIXELS,
+        .restart_band_pixels = VISION_TRACKING_RESTART_BAND_PIXELS,
         .maximum_pulses = VISION_TRACKING_YAW_MAX_PULSES,
         .command_period_ms = VISION_TRACKING_COMMAND_PERIOD_MS,
         .positive_error_is_cw = VISION_TRACKING_YAW_POSITIVE_IS_CW,
@@ -117,7 +139,8 @@ void vision_tracking_task(void *argument)
         .kp_pulses_per_pixel = VISION_TRACKING_PITCH_KP_PULSES_PER_PIXEL,
         .kd_pulse_seconds_per_pixel =
             VISION_TRACKING_PITCH_KD_PULSE_SECONDS_PER_PIXEL,
-        .deadband_pixels = VISION_TRACKING_DEADBAND_PIXELS,
+        .stop_band_pixels = VISION_TRACKING_STOP_BAND_PIXELS,
+        .restart_band_pixels = VISION_TRACKING_RESTART_BAND_PIXELS,
         .maximum_pulses = VISION_TRACKING_PITCH_MAX_PULSES,
         .command_period_ms = VISION_TRACKING_COMMAND_PERIOD_MS,
         .positive_error_is_cw = VISION_TRACKING_PITCH_POSITIVE_IS_CW,
@@ -144,6 +167,11 @@ void vision_tracking_task(void *argument)
     vision_stimulus_init(&stimulus, VISION_TRACKING_STIMULUS_SEED);
     g_vision_tracking_debug.using_simulated_input = 1U;
 #endif
+    /* A driver keeps stall protection latched across MCU resets. Clear a
+     * historical fault once at visual-task startup, then enable both axes.
+     * A persistent mechanical obstruction will still trip protection again. */
+    (void)stepper_service_clear_axis_stall(STEPPER_AXIS_YAW);
+    (void)stepper_service_clear_axis_stall(STEPPER_AXIS_PITCH);
     (void)stepper_service_set_axis_enabled(STEPPER_AXIS_YAW, true);
     (void)stepper_service_set_axis_enabled(STEPPER_AXIS_PITCH, true);
 
@@ -175,6 +203,8 @@ void vision_tracking_task(void *argument)
             if (g_control_enabled != previous_control_enabled) {
                 gimbal_pd_tracker_init(&yaw_tracker);
                 gimbal_pd_tracker_init(&pitch_tracker);
+                yaw.motion_command_active = false;
+                pitch.motion_command_active = false;
                 previous_control_enabled = g_control_enabled;
             }
             yaw_config.kp_pulses_per_pixel = g_tuning.yaw_kp;
@@ -183,23 +213,18 @@ void vision_tracking_task(void *argument)
             pitch_config.kd_pulse_seconds_per_pixel = g_tuning.pitch_kd;
             if (g_control_enabled) {
                 int32_t output_pulses;
+                gimbal_pd_action_t action;
 
-                if (gimbal_pd_tracker_update(&yaw_tracker, &yaw_config,
-                                             observation.target_valid,
-                                             (int16_t)dx,
-                                             now_ms,
-                                             &output_pulses) &&
-                    submit_axis_move(&yaw, output_pulses)) {
-                    g_vision_tracking_debug.yaw_command_count++;
-                }
-                if (gimbal_pd_tracker_update(&pitch_tracker, &pitch_config,
-                                             observation.target_valid,
-                                             (int16_t)dy,
-                                             now_ms,
-                                             &output_pulses) &&
-                    submit_axis_move(&pitch, output_pulses)) {
-                    g_vision_tracking_debug.pitch_command_count++;
-                }
+                action = gimbal_pd_tracker_update(
+                    &yaw_tracker, &yaw_config, observation.target_valid,
+                    (int16_t)dx, now_ms, &output_pulses);
+                apply_axis_action(&yaw, action, output_pulses,
+                                  &g_vision_tracking_debug.yaw_command_count);
+                action = gimbal_pd_tracker_update(
+                    &pitch_tracker, &pitch_config, observation.target_valid,
+                    (int16_t)dy, now_ms, &output_pulses);
+                apply_axis_action(&pitch, action, output_pulses,
+                                  &g_vision_tracking_debug.pitch_command_count);
                 g_vision_tracking_debug.yaw_p_term_milli_pulses =
                     yaw_tracker.last_p_term_milli_pulses;
                 g_vision_tracking_debug.yaw_d_term_milli_pulses =

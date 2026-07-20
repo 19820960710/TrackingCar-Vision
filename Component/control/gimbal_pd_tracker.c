@@ -17,6 +17,16 @@ static int32_t clamp_i32(int32_t value, int32_t maximum)
     return value;
 }
 
+static void reset_control_terms(gimbal_pd_tracker_t *tracker,
+                                int32_t *output_pulses)
+{
+    tracker->derivative_initialized = false;
+    tracker->last_p_term_milli_pulses = 0;
+    tracker->last_d_term_milli_pulses = 0;
+    tracker->last_output_pulses = 0;
+    *output_pulses = 0;
+}
+
 void gimbal_pd_tracker_init(gimbal_pd_tracker_t *tracker)
 {
     if (tracker != NULL) {
@@ -24,10 +34,11 @@ void gimbal_pd_tracker_init(gimbal_pd_tracker_t *tracker)
     }
 }
 
-bool gimbal_pd_tracker_update(gimbal_pd_tracker_t *tracker,
-                              const gimbal_pd_tracker_config_t *config,
-                              bool target_valid, int16_t error_pixels,
-                              uint32_t now_ms, int32_t *output_pulses)
+gimbal_pd_action_t gimbal_pd_tracker_update(
+    gimbal_pd_tracker_t *tracker,
+    const gimbal_pd_tracker_config_t *config,
+    bool target_valid, int16_t error_pixels,
+    uint32_t now_ms, int32_t *output_pulses)
 {
     float p_term;
     float d_term = 0.0f;
@@ -35,20 +46,31 @@ bool gimbal_pd_tracker_update(gimbal_pd_tracker_t *tracker,
     uint32_t elapsed_ms;
 
     if ((tracker == NULL) || (config == NULL) || (output_pulses == NULL)) {
-        return false;
+        return GIMBAL_PD_ACTION_HOLD;
     }
-    if ((!target_valid) ||
-        ((error_pixels <= config->deadband_pixels) &&
-         (error_pixels >= -config->deadband_pixels))) {
+    if (!target_valid) {
+        tracker->center_hold_active = true;
+        reset_control_terms(tracker, output_pulses);
+        return GIMBAL_PD_ACTION_STOP;
+    }
+    if (tracker->center_hold_active) {
+        if ((error_pixels <= config->restart_band_pixels) &&
+            (error_pixels >= -config->restart_band_pixels)) {
+            reset_control_terms(tracker, output_pulses);
+            return GIMBAL_PD_ACTION_STOP;
+        }
+        tracker->center_hold_active = false;
         tracker->derivative_initialized = false;
-        tracker->last_p_term_milli_pulses = 0;
-        tracker->last_d_term_milli_pulses = 0;
-        tracker->last_output_pulses = 0;
-        return false;
+    }
+    if ((error_pixels <= config->stop_band_pixels) &&
+        (error_pixels >= -config->stop_band_pixels)) {
+        tracker->center_hold_active = true;
+        reset_control_terms(tracker, output_pulses);
+        return GIMBAL_PD_ACTION_STOP;
     }
     if ((uint32_t)(now_ms - tracker->last_command_ms) <
         config->command_period_ms) {
-        return false;
+        return GIMBAL_PD_ACTION_HOLD;
     }
 
     p_term = (float)error_pixels * config->kp_pulses_per_pixel;
@@ -75,5 +97,5 @@ bool gimbal_pd_tracker_update(gimbal_pd_tracker_t *tracker,
     tracker->last_output_pulses = pulses;
     tracker->derivative_initialized = true;
     *output_pulses = pulses;
-    return true;
+    return GIMBAL_PD_ACTION_MOVE;
 }

@@ -22,6 +22,8 @@ typedef struct {
     float right_speed_mm_s;
     float left_target_mm_s;
     float right_target_mm_s;
+    int32_t left_encoder_count;
+    int32_t right_encoder_count;
     int32_t left_pwm_duty_count;
     int32_t right_pwm_duty_count;
     bool stopped;

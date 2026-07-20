@@ -30,10 +30,15 @@ typedef struct {
 
 bool stepper_service_init(void);
 bool stepper_service_set_axis_enabled(stepper_axis_t axis, bool enabled);
-/** Discard queued commands without changing either motor's hardware state. */
+/** Queue the protocol command that clears a latched stall-protection fault. */
+bool stepper_service_clear_axis_stall(stepper_axis_t axis);
+/** Discard queued commands and both axes' latest pending moves. */
 bool stepper_service_clear_pending_commands(void);
 /** Discard queued moves and immediately stop both axes without disabling. */
 bool stepper_service_stop_all(void);
+/** Queue a stop for one axis without disabling it. */
+bool stepper_service_stop_axis(stepper_axis_t axis);
+/** Replace this axis' pending move; an older unsent move is discarded. */
 bool stepper_service_move_axis(stepper_axis_t axis,
                                const stepper_motor_move_t *move);
 bool stepper_service_request_position(stepper_axis_t axis);

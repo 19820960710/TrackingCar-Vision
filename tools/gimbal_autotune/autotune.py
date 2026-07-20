@@ -455,7 +455,7 @@ def validate_candidate(evaluator: Evaluator, recorder: RunRecorder,
                        candidate: Candidate) -> dict:
     mailboxes = []
     for index, seed in enumerate((DEFAULT_SEED, DEFAULT_SEED + 1)):
-        mailbox = evaluator.evaluate(candidate, 8, seed, "both", 400)
+        mailbox = evaluator.evaluate(candidate, 8, seed, "both", 120)
         recorder.record(f"validation_{index}", candidate, seed, mailbox)
         mailboxes.append(mailbox)
     trials = [trial for mailbox in mailboxes for trial in list(mailbox.result)[:8]]
@@ -576,34 +576,36 @@ def main() -> int:
         evaluator.preflight()
         if not args.validate_only:
             search_trials = 3 if args.quick else 5
-            search_pulses = 120 if args.quick else 400
+            # Keep the rectangle in view on the installed camera/gimbal.
+            # Earlier 383-pulse trials moved the target out of frame.
+            search_pulses = 120
             selected = choose_axis(
                 evaluator, recorder, "yaw_coarse",
-                grid(selected, "yaw", (0.12, 0.20, 0.28),
-                     (0.0, 0.006, 0.012)), "yaw", search_trials,
+                grid(selected, "yaw", (0.80, 1.20, 1.60),
+                     (0.0, 0.008, 0.016)), "yaw", search_trials,
                 DEFAULT_SEED, search_pulses)
             if not args.quick:
                 selected = choose_axis(
                     evaluator, recorder, "yaw_fine",
                     grid(selected, "yaw",
-                         (max(0.0, selected.yaw_kp - 0.04), selected.yaw_kp,
-                          selected.yaw_kp + 0.04),
-                         (max(0.0, selected.yaw_kd - 0.002), selected.yaw_kd,
-                          selected.yaw_kd + 0.002)),
+                         (max(0.0, selected.yaw_kp - 0.20), selected.yaw_kp,
+                          selected.yaw_kp + 0.20),
+                         (max(0.0, selected.yaw_kd - 0.004), selected.yaw_kd,
+                          selected.yaw_kd + 0.004)),
                     "yaw", search_trials, DEFAULT_SEED, search_pulses)
             selected = choose_axis(
                 evaluator, recorder, "pitch_coarse",
-                grid(selected, "pitch", (0.24, 0.40, 0.56),
-                     (0.0, 0.005, 0.010)), "pitch", search_trials,
+                grid(selected, "pitch", (0.80, 1.20, 1.60),
+                     (0.0, 0.008, 0.016)), "pitch", search_trials,
                 DEFAULT_SEED, search_pulses)
             if not args.quick:
                 selected = choose_axis(
                     evaluator, recorder, "pitch_fine",
                     grid(selected, "pitch",
-                         (max(0.0, selected.pitch_kp - 0.08), selected.pitch_kp,
-                          selected.pitch_kp + 0.08),
-                         (max(0.0, selected.pitch_kd - 0.0025), selected.pitch_kd,
-                          selected.pitch_kd + 0.0025)),
+                         (max(0.0, selected.pitch_kp - 0.20), selected.pitch_kp,
+                          selected.pitch_kp + 0.20),
+                         (max(0.0, selected.pitch_kd - 0.004), selected.pitch_kd,
+                          selected.pitch_kd + 0.004)),
                     "pitch", search_trials, DEFAULT_SEED, search_pulses)
         validation = (validate_candidate_quick(evaluator, recorder, selected)
                       if args.quick else

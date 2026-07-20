@@ -18,6 +18,12 @@ bool stepper_motor_set_enabled(stepper_motor_t *motor, bool enabled)
            zdt_x42s_set_enabled(&motor->protocol, enabled);
 }
 
+bool stepper_motor_clear_stall_protection(stepper_motor_t *motor)
+{
+    return (motor != NULL) &&
+           zdt_x42s_clear_stall_protection(&motor->protocol);
+}
+
 bool stepper_motor_move(stepper_motor_t *motor,
                         const stepper_motor_move_t *move)
 {

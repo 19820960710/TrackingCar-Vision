@@ -66,6 +66,8 @@ bool zdt_x42s_init(zdt_x42s_t *motor,
                    const zdt_x42s_transport_t *transport,
                    uint8_t address);
 bool zdt_x42s_set_enabled(zdt_x42s_t *motor, bool enabled);
+/** Clear the driver's latched stall-protection state. */
+bool zdt_x42s_clear_stall_protection(zdt_x42s_t *motor);
 bool zdt_x42s_start_move(zdt_x42s_t *motor, const zdt_x42s_move_t *move);
 bool zdt_x42s_stop(zdt_x42s_t *motor, uint8_t sync_flag);
 bool zdt_x42s_request_position(zdt_x42s_t *motor);

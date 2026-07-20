@@ -46,6 +46,8 @@
 #include "app/vision_tracking.h"
 #include "config/gimbal_autotune_config.h"
 #include "app/gimbal_autotune.h"
+#include "config/line_tracking_config.h"
+#include "app/line_tracking.h"
 #include "vision/vision_uart.h"
 #include <stdint.h>
 #include <stdbool.h>
@@ -364,7 +366,8 @@ static void yaw_loop_task(void *pvParameters)
          * 此时 base_speed、turn_rpm、speed_ff_enable 等已写入状态快照。 */
         bool control_ran = yaw_loop_service_step_10ms();
 
-        if (control_ran) {
+        /* The line task is the sole wheel-target owner while enabled. */
+        if (control_ran && (LINE_TRACKING_ENABLED == 0)) {
             app_yaw_status_t yaw = {0};
             if (yaw_loop_service_get_status(&yaw) && yaw.enabled) {
                 if (!yaw.attitude_valid) {
@@ -574,6 +577,11 @@ void app_tasks_start(void)
         !speed_service_init() || !stepper_service_init()) {
         while (1) {}
     }
+#if LINE_TRACKING_ENABLED
+    if (!line_tracking_init()) {
+        while (1) {}
+    }
+#endif
 
     /* 创建全部 6 个 FreeRTOS 任务。
      * 优先级：数值越大优先级越高。
@@ -586,6 +594,9 @@ void app_tasks_start(void)
     xTaskCreate(speed_loop_task, "SPD_LOOP", 512, NULL, 3,
                 &g_speed_loop_task_handle);
     xTaskCreate(stepper_service_task, "STEPPER", 256, NULL, 2, NULL);
+#if LINE_TRACKING_ENABLED
+    xTaskCreate(line_tracking_task, "LINE", 384, NULL, 2, NULL);
+#endif
 #if ACTUATOR_VALIDATION_ENABLED
     xTaskCreate(actuator_validation_task, "ACT_TEST", 256, NULL, 2, NULL);
 #elif VISION_TRACKING_ENABLED
